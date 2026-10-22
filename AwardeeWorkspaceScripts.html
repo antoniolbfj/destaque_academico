@@ -1,0 +1,423 @@
+<script>
+  var AwardeeWorkspaceController = (function () {
+    var state = {
+      workspace: null,
+      loading: false,
+      mode: 'records',
+      selectedRa: '',
+      pending: [],
+      newCycle: false,
+      listScrollTop: 0,
+      guardedMenuId: '',
+      guardMode: '',
+      prizeRevision: 0,
+      latestPrizes: []
+    };
+
+    function init() {
+      document.getElementById('menuAwardees').addEventListener('click', function () { open(); });
+      document.getElementById('awModeRecords').addEventListener('click', function () { setMode_('records'); });
+      document.getElementById('awModeStudents').addEventListener('click', function () { setMode_('students'); });
+      ['awFromYear','awToYear','awPrizeFilter','awRegimeFilter','awCourseFilter','awPeriodClassFilter'].forEach(function (id) {
+        document.getElementById(id).addEventListener('change', function () { rebuildContextualFilters_(); renderAll_(); });
+      });
+      document.getElementById('awSearch').addEventListener('input', renderTable_);
+      ['awGroup','awSort'].forEach(function (id) { document.getElementById(id).addEventListener('change', renderTable_); });
+      document.getElementById('awClearFilters').addEventListener('click', clearFilters_);
+      document.getElementById('awBack').addEventListener('click', backToList_);
+      document.getElementById('awReviewPending').addEventListener('click', function () {
+        var panel = document.getElementById('awPendingPanel'); panel.hidden = !panel.hidden;
+      });
+      document.getElementById('awClosePending').addEventListener('click', function () { document.getElementById('awPendingPanel').hidden = true; });
+      document.getElementById('awSavePending').addEventListener('click', savePending_);
+      document.getElementById('awGuardCancel').addEventListener('click', hideGuard_);
+      document.getElementById('awGuardSave').addEventListener('click', saveFromGuard_);
+      window.addEventListener('beforeunload', function (event) {
+        if (!state.pending.length) return;
+        event.preventDefault(); event.returnValue = '';
+      });
+
+      document.querySelectorAll('.sidebar-item').forEach(function (button) {
+        if (button.id === 'menuAwardees') return;
+        button.addEventListener('click', function (event) {
+          if (document.getElementById('awardeeWorkspace').hidden || !state.pending.length) return;
+          event.preventDefault(); event.stopImmediatePropagation();
+          state.guardedMenuId = button.id; state.guardMode = 'navigation';
+          showGuard_('Premiações não salvas', 'Salve as premiações complementares ou volte à mesa antes de trocar de módulo.');
+        }, true);
+      });
+    }
+
+    function setActiveMenu_() {
+      document.querySelectorAll('.sidebar-item').forEach(function (b) { b.classList.toggle('is-active', b.id === 'menuAwardees'); });
+      document.getElementById('activeSectionTitle').textContent = 'Premiados';
+    }
+
+    function showWorkspace_() {
+      document.getElementById('mainContent').hidden = true;
+      document.getElementById('manualAwardeeWorkspace').hidden = true;
+      document.getElementById('awardeeReportWorkspace').hidden = true;
+        document.getElementById('publicPortalConfigWorkspace').hidden = true;
+      document.getElementById('awardeeWorkspace').hidden = false;
+      document.getElementById('apStudentBackdrop').hidden = true;
+      document.getElementById('apStudentDrawer').classList.remove('is-open');
+      bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('sidePanel')).hide();
+      setActiveMenu_();
+    }
+
+    async function open() {
+      if (!AppModel.state.permissions || !AppModel.state.permissions.canManageRecords) return;
+      if (!document.getElementById('awardeeWorkspace').hidden && state.pending.length) {
+        showMessage_('warning', 'Existem premiações complementares não salvas. Salve ou retire o rascunho antes de recarregar a mesa.');
+        return;
+      }
+      showWorkspace_();
+      state.loading = true;
+      showMessage_('', '');
+      document.getElementById('awTableHost').innerHTML = '<div class="ap-loading"><span class="spinner-border spinner-border-sm me-2"></span>Carregando histórico de premiados…</div>';
+      try {
+        var prizeRevision = state.prizeRevision;
+        state.workspace = await ApiClient.authenticatedCall('getAwardeeWorkspace');
+        if(prizeRevision!==state.prizeRevision)state.workspace.prizes=complementaryPrizes_();
+        state.newCycle = false;
+        initializeFilters_();
+        renderAll_();
+      } catch (error) {
+        showMessage_('error', UiUtil.actionableErrorMessage(error, 'Não foi possível carregar a Mesa de Premiados.'));
+        document.getElementById('awTableHost').innerHTML = '<div class="ap-empty">Falha ao carregar os registros.</div>';
+      } finally { state.loading = false; }
+    }
+
+    function showMessage_(type, message) {
+      var box = document.getElementById('awMessage');
+      if (!message) { box.hidden = true; box.textContent = ''; box.className = 'ap-inline-message'; return; }
+      box.hidden = false; box.className = 'ap-inline-message' + (type ? ' is-' + type : ''); box.textContent = message;
+    }
+
+    function records_() { return state.workspace && state.workspace.records || []; }
+    function drafts_() { return state.workspace && state.workspace.drafts || []; }
+    function unique_(values) {
+      var seen = {}; return values.filter(function (v) { var k = String(v === null || v === undefined ? '' : v); if (!k || seen[k]) return false; seen[k] = true; return true; });
+    }
+    function numeric_(value) { return value === null || value === undefined || value === '' || !Number.isFinite(Number(value)) ? null : Number(value); }
+    function average_(values) { var nums = values.map(numeric_).filter(function (v) { return v !== null; }); return nums.length ? nums.reduce(function (a,b) { return a+b; },0) / nums.length : null; }
+    function formatNumber_(value, digits) { var n=numeric_(value); if(n===null)return '—'; return n.toLocaleString('pt-BR',{minimumFractionDigits:digits||0,maximumFractionDigits:digits===undefined?2:digits}); }
+    function recordDate_(r) { return String(r.publishedAt || r.approvedAt || r.registeredAt || (r.year ? r.year + '-01-01' : '')); }
+    function isAdditional_(r) { return Boolean(r && r.isAdditional); }
+
+    function periodClassKey_(r) {
+      var p = String(r.coursePeriod === null || r.coursePeriod === undefined ? '' : r.coursePeriod).trim();
+      var g = String(r.classGroup === null || r.classGroup === undefined ? '' : r.classGroup).trim();
+      return p || g ? p + '||' + g : '';
+    }
+    function periodClassLabelFromParts_(p, g) { return p && g ? p + g : (p || g || ''); }
+    function periodClassLabel_(r) {
+      return periodClassLabelFromParts_(String(r.coursePeriod || '').trim(), String(r.classGroup || '').trim());
+    }
+    function parsePeriodClass_(value) {
+      var parts = String(value || '').split('||'); return { coursePeriod: parts[0] || '', classGroup: parts[1] || '' };
+    }
+
+    function setSelect_(id, values, first, preferred, labelFn) {
+      var select = document.getElementById(id); var val = preferred === undefined ? select.value : preferred;
+      select.innerHTML = '<option value="">' + UiUtil.escapeHtml(first || 'Todos') + '</option>' + values.map(function (item) {
+        var value = typeof item === 'object' ? item.value : item;
+        var label = labelFn ? labelFn(item) : (typeof item === 'object' ? item.label : item);
+        return '<option value="' + UiUtil.escapeAttr(value) + '">' + UiUtil.escapeHtml(label) + '</option>';
+      }).join('');
+      var allowed = values.map(function (item) { return String(typeof item === 'object' ? item.value : item); });
+      select.value = allowed.indexOf(String(val)) >= 0 ? String(val) : '';
+      return select.value;
+    }
+
+    function initializeFilters_() {
+      var years = unique_(records_().map(function (r) { return r.year; }).filter(function (y) { return y !== null && y !== undefined && y !== ''; })).map(Number).sort(function(a,b){return a-b;});
+      var from = years.length ? String(years[0]) : '';
+      var to = years.length ? String(years[years.length-1]) : '';
+      setSelect_('awFromYear', years, 'Todos', from);
+      setSelect_('awToYear', years, 'Todos', to);
+      document.getElementById('awSearch').value = '';
+      document.getElementById('awGroup').value = '';
+      document.getElementById('awSort').value = 'date';
+      rebuildContextualFilters_();
+    }
+
+    function yearFiltered_(rows) {
+      var from = Number(document.getElementById('awFromYear').value || 0);
+      var to = Number(document.getElementById('awToYear').value || 9999);
+      return rows.filter(function (r) { var y=Number(r.year||0); return (!from || y>=from) && (!to || y<=to); });
+    }
+
+    function rebuildContextualFilters_() {
+      var all = records_();
+      var years = unique_(all.map(function (r) { return r.year; }).filter(Boolean)).map(Number).sort(function(a,b){return a-b;});
+      var currentFrom = document.getElementById('awFromYear').value;
+      setSelect_('awFromYear', years, 'Todos', currentFrom || (years.length ? String(years[0]) : ''));
+      var fromN = Number(document.getElementById('awFromYear').value || 0);
+      var toYears = years.filter(function(y){return !fromN || y>=fromN;});
+      var currentTo = document.getElementById('awToYear').value;
+      setSelect_('awToYear', toYears, 'Todos', currentTo || (toYears.length ? String(toYears[toYears.length-1]) : ''));
+
+      var rows = yearFiltered_(all);
+      var prizeValue = document.getElementById('awPrizeFilter').value;
+      var prizes = unique_(rows.map(function(r){return r.prize;})).sort(TextUtilClientCompare_);
+      setSelect_('awPrizeFilter', prizes, 'Todos os prêmios', prizeValue);
+      if (document.getElementById('awPrizeFilter').value) rows = rows.filter(function(r){return r.prize===document.getElementById('awPrizeFilter').value;});
+
+      var regimeValue = document.getElementById('awRegimeFilter').value;
+      var regimes = unique_(rows.map(function(r){return r.regime;})).sort(TextUtilClientCompare_);
+      setSelect_('awRegimeFilter', regimes, 'Todos', regimeValue);
+      if (document.getElementById('awRegimeFilter').value) rows = rows.filter(function(r){return r.regime===document.getElementById('awRegimeFilter').value;});
+
+      var courseValue = document.getElementById('awCourseFilter').value;
+      var courses = unique_(rows.map(function(r){return r.course;})).sort(TextUtilClientCompare_);
+      setSelect_('awCourseFilter', courses, 'Todos os cursos', courseValue);
+      if (document.getElementById('awCourseFilter').value) rows = rows.filter(function(r){return r.course===document.getElementById('awCourseFilter').value;});
+
+      var contextValue = document.getElementById('awPeriodClassFilter').value;
+      var contexts = [];
+      unique_(rows.map(periodClassKey_)).forEach(function(key){
+        if(!key)return; var parts=parsePeriodClass_(key); contexts.push({value:key,label:periodClassLabelFromParts_(parts.coursePeriod,parts.classGroup)});
+      });
+      contexts.sort(function(a,b){return String(a.label).localeCompare(String(b.label),'pt-BR',{numeric:true,sensitivity:'base'});});
+      setSelect_('awPeriodClassFilter', contexts, 'Todos', contextValue);
+    }
+
+    function TextUtilClientCompare_(a,b) { return String(a||'').localeCompare(String(b||''),'pt-BR',{sensitivity:'base'}); }
+
+    function baseFilteredRows_() {
+      var rows = yearFiltered_(records_());
+      var prize=document.getElementById('awPrizeFilter').value, regime=document.getElementById('awRegimeFilter').value,
+        course=document.getElementById('awCourseFilter').value, context=document.getElementById('awPeriodClassFilter').value;
+      return rows.filter(function(r){
+        return (!prize||r.prize===prize) && (!regime||r.regime===regime) && (!course||r.course===course) && (!context||periodClassKey_(r)===context);
+      });
+    }
+
+    function filteredRows_() {
+      var q=String(document.getElementById('awSearch').value||'').trim().toLocaleLowerCase('pt-BR');
+      return baseFilteredRows_().filter(function(r){return !q || (r.name+' '+r.ra+' '+r.course+' '+r.prize).toLocaleLowerCase('pt-BR').indexOf(q)>=0;});
+    }
+
+    function aggregate_(rows) {
+      var map={}; rows.forEach(function(r){(map[r.ra]||(map[r.ra]=[])).push(r);});
+      return Object.keys(map).map(function(ra){
+        var xs=map[ra], latest=xs.slice().sort(function(a,b){return recordDate_(b).localeCompare(recordDate_(a));})[0];
+        return {ra:ra,name:xs[0].name,course:xs[0].course,count:xs.length,types:unique_(xs.map(function(x){return x.prize;})).length,
+          average:average_(xs.map(function(x){return x.average;})),frequency:average_(xs.map(function(x){return x.frequency;})),
+          firstYear:Math.min.apply(null,xs.map(function(x){return Number(x.year||0);})),lastYear:Math.max.apply(null,xs.map(function(x){return Number(x.year||0);})),
+          latest:latest,additionalCount:xs.filter(isAdditional_).length,records:xs};
+      });
+    }
+
+    function sortAggregates_(rows) {
+      var sort=document.getElementById('awSort').value;
+      return rows.slice().sort(function(a,b){
+        if(sort==='count')return b.count-a.count||TextUtilClientCompare_(a.name,b.name);
+        if(sort==='avg')return Number(b.average===null?-Infinity:b.average)-Number(a.average===null?-Infinity:a.average)||TextUtilClientCompare_(a.name,b.name);
+        if(sort==='freq')return Number(b.frequency===null?-Infinity:b.frequency)-Number(a.frequency===null?-Infinity:a.frequency)||TextUtilClientCompare_(a.name,b.name);
+        if(sort==='name')return TextUtilClientCompare_(a.name,b.name);
+        return recordDate_(b.latest).localeCompare(recordDate_(a.latest))||TextUtilClientCompare_(a.name,b.name);
+      });
+    }
+
+    function sortRecords_(rows) {
+      var sort=document.getElementById('awSort').value, aggregateMap={};
+      aggregate_(rows).forEach(function(a){aggregateMap[a.ra]=a;});
+      return rows.slice().sort(function(a,b){
+        if(sort==='count')return (aggregateMap[b.ra].count-aggregateMap[a.ra].count)||recordDate_(b).localeCompare(recordDate_(a));
+        if(sort==='avg')return Number(b.average===null?-Infinity:b.average)-Number(a.average===null?-Infinity:a.average)||recordDate_(b).localeCompare(recordDate_(a));
+        if(sort==='freq')return Number(b.frequency===null?-Infinity:b.frequency)-Number(a.frequency===null?-Infinity:a.frequency)||recordDate_(b).localeCompare(recordDate_(a));
+        if(sort==='name')return TextUtilClientCompare_(a.name,b.name)||recordDate_(b).localeCompare(recordDate_(a));
+        return recordDate_(b).localeCompare(recordDate_(a))||TextUtilClientCompare_(a.name,b.name);
+      });
+    }
+
+    function renderAll_() { renderTop_(); renderTable_(); renderPending_(); if(state.selectedRa) renderAnalysis_(state.selectedRa); }
+
+    function effectiveStatus_() {
+      if (state.newCycle) return 'EM APURAÇÃO';
+      return state.workspace && state.workspace.lifecycle && state.workspace.lifecycle.status || 'EM APURAÇÃO';
+    }
+
+    function renderTop_() {
+      var rows=filteredRows_(), status=effectiveStatus_(), lifecycle=state.workspace&&state.workspace.lifecycle||{};
+      document.getElementById('awAwardCount').textContent=rows.length.toLocaleString('pt-BR');
+      document.getElementById('awStudentCount').textContent=unique_(rows.map(function(r){return r.ra;})).length.toLocaleString('pt-BR');
+      document.getElementById('awTypeCount').textContent=unique_(rows.map(function(r){return r.prize;})).length.toLocaleString('pt-BR');
+      document.getElementById('awDraftCount').textContent=Number((drafts_()||[]).length).toLocaleString('pt-BR');
+      var steps=[['EM APURAÇÃO','ap-under'],['PUBLICADO','ap-published']];
+      document.getElementById('awStateStepper').innerHTML=steps.map(function(step,index){return(index?'<span class="ap-step-link"></span>':'')+'<span class="ap-step '+(status===step[0]?'is-current '+step[1]:'')+'"><i class="bi bi-circle-fill"></i>'+step[0]+'</span>';}).join('');
+      var transition=document.getElementById('awTransition');
+      if(status==='PUBLICADO'){
+        transition.hidden=false;transition.textContent='Iniciar nova apuração';transition.className='ap-transition is-homologate';
+        transition.onclick=function(){state.newCycle=true;renderTop_();if(state.selectedRa)renderAwardEditor_(studentAggregateByRa_(state.selectedRa));};
+        document.getElementById('awStateCaption').textContent='Último lote publicado. Os prêmios complementares já integram o histórico e uma nova apuração pode ser iniciada.';
+      }else{
+        var hasDrafts=drafts_().length>0||state.pending.length>0;
+        transition.hidden=!hasDrafts;transition.textContent='Publicar resultado';transition.className='ap-transition';transition.onclick=publish_;
+        document.getElementById('awStateCaption').textContent=drafts_().length?'Prêmios complementares salvos permanecem EM APURAÇÃO até a publicação.':(state.newCycle?'Nova apuração aberta: filtre, analise e conceda os prêmios que desejar.':'Mesa pronta para uma nova análise sobre o histórico consolidado.');
+      }
+      var save=document.getElementById('awSaveState'),n=state.pending.length;
+      save.className='ap-save-state'+(n?' is-dirty':'');save.innerHTML=n?'<i class="bi bi-circle-fill"></i><span>'+n+' premiação(ões) não salva(s)</span>':'<i class="bi bi-check-circle-fill"></i><span>Tudo salvo</span>';
+      document.getElementById('awSavePending').hidden=!n;
+      document.getElementById('awReviewPending').hidden=!(n||drafts_().length);
+      if(!(n||drafts_().length))document.getElementById('awPendingPanel').hidden=true;
+      setBusy_(state.loading);
+    }
+
+    function renderPending_() {
+      var host=document.getElementById('awPendingList'),html='';
+      if(state.pending.length){html+='<div class="aw-pending-section"><strong>Não salvas</strong>'+state.pending.map(function(p){return '<div class="ap-pending-item"><div><strong>'+UiUtil.escapeHtml(p.name)+'</strong><small>Prêmio: '+UiUtil.escapeHtml(p.prize)+' · '+UiUtil.escapeHtml(p.justification)+'</small></div><button class="ap-icon-btn" type="button" data-aw-local="'+UiUtil.escapeAttr(p.id)+'"><i class="bi bi-x-lg"></i></button></div>';}).join('')+'</div>';}
+      if(drafts_().length){html+='<div class="aw-pending-section"><strong>Salvas — EM APURAÇÃO</strong>'+drafts_().map(function(p){return '<div class="ap-pending-item"><div><strong>'+UiUtil.escapeHtml(p.name)+'</strong><small>Prêmio: '+UiUtil.escapeHtml(p.prize)+' · '+UiUtil.escapeHtml(p.justification)+'</small></div><button class="ap-icon-btn" type="button" title="Retirar da apuração" data-aw-saved="'+UiUtil.escapeAttr(p.id)+'"><i class="bi bi-x-lg"></i></button></div>';}).join('')+'</div>';}
+      host.innerHTML=html||'<div class="ap-empty">Nenhuma premiação em apuração.</div>';
+      host.querySelectorAll('[data-aw-local]').forEach(function(b){b.addEventListener('click',function(){if(state.loading)return;state.pending=state.pending.filter(function(p){return p.id!==b.dataset.awLocal;});renderAll_();});});
+      host.querySelectorAll('[data-aw-saved]').forEach(function(b){b.addEventListener('click',function(){removeSavedDraft_(b.dataset.awSaved);});});
+    }
+
+    function recordContextHtml_(r) {
+      if(isAdditional_(r)) return UiUtil.escapeHtml(r.year || '—') + '<small><span class="aw-additional-badge"><i class="bi bi-star-fill"></i> Prêmio complementar</span></small>';
+      var pc=periodClassLabel_(r), academic=r.regime==='SEMESTRAL'?(r.year+'/'+r.semester):(r.year||'');
+      return UiUtil.escapeHtml(academic)+(r.regime?' · '+UiUtil.escapeHtml(r.regime):'')+(pc?'<small>'+UiUtil.escapeHtml(pc)+'</small>':'');
+    }
+
+    function additionalBadge_(r) { return isAdditional_(r)?'<span class="aw-additional-badge"><i class="bi bi-star-fill"></i> Prêmio complementar</span>':''; }
+
+    function renderTable_() {
+      var rows=filteredRows_(),group=document.getElementById('awGroup').value;
+      if(state.mode==='students'){
+        var students=sortAggregates_(aggregate_(rows));
+        document.getElementById('awTableTitle').textContent='Premiados — consolidado por aluno';document.getElementById('awTableMeta').textContent=students.length+' aluno(s) após os filtros';
+        document.getElementById('awTableHost').innerHTML='<table class="aw-table aw-table-students"><colgroup><col class="aw-col-person"><col class="aw-col-small"><col class="aw-col-small"><col class="aw-col-medium"><col class="aw-col-medium"><col class="aw-col-action"></colgroup><thead><tr><th>Estudante</th><th>Prêmios</th><th>Tipos</th><th>Desempenho médio</th><th>Recorte / destaque</th><th></th></tr></thead><tbody>'+students.map(function(s){return '<tr class="'+(s.additionalCount?'is-additional':'')+'"><td class="aw-person"><strong>'+UiUtil.escapeHtml(s.name)+'</strong><small>'+UiUtil.escapeHtml(s.ra)+' · '+UiUtil.escapeHtml(s.course)+'</small></td><td class="aw-number">'+s.count+'</td><td class="aw-number">'+s.types+'</td><td><strong>'+formatNumber_(s.average,1)+'</strong><small>Freq. '+formatNumber_(s.frequency,1)+(s.frequency!==null?'%':'')+'</small></td><td>'+s.firstYear+'–'+s.lastYear+(s.additionalCount?'<small class="aw-star-line"><i class="bi bi-star-fill"></i> '+s.additionalCount+' prêmio(s) complementar(es)</small>':'')+'</td><td><button class="ap-analyze" type="button" data-aw-student="'+UiUtil.escapeAttr(s.ra)+'">Analisar</button></td></tr>';}).join('')+'</tbody></table>';
+      }else{
+        var sorted=sortRecords_(rows),groups={'__all':sorted};
+        if(group){groups={};sorted.forEach(function(r){var key=group==='student'?r.name:group==='course'?r.course:group==='prize'?r.prize:group==='year'?r.year:(periodClassLabel_(r)||'Sem período/turma');(groups[key]||(groups[key]=[])).push(r);});}
+        var html='';Object.keys(groups).forEach(function(key){if(group)html+='<div class="ap-group-label">'+UiUtil.escapeHtml(key)+'</div>';html+='<table class="aw-table"><colgroup><col class="aw-col-person"><col class="aw-col-prize"><col class="aw-col-context"><col class="aw-col-performance"><col class="aw-col-classification"><col class="aw-col-action"></colgroup><thead><tr><th>Estudante</th><th>Prêmio</th><th>Contexto</th><th>Desempenho</th><th>Classificação</th><th></th></tr></thead><tbody>'+groups[key].map(function(r){return '<tr class="'+(isAdditional_(r)?'is-additional':'')+'"><td class="aw-person"><strong>'+UiUtil.escapeHtml(r.name)+'</strong><small>'+UiUtil.escapeHtml(r.ra)+' · '+UiUtil.escapeHtml(r.course)+'</small></td><td><span class="ap-status ap-awarded">'+UiUtil.escapeHtml(r.prize)+'</span>'+additionalBadge_(r)+'</td><td>'+recordContextHtml_(r)+'</td><td><strong>Média '+formatNumber_(r.average,1)+'</strong><small>Freq. '+formatNumber_(r.frequency,1)+(r.frequency!==null?'%':'')+'</small></td><td>'+UiUtil.escapeHtml(r.classificationIndicator||'—')+'<small>Posição '+(r.position===null||r.position===undefined?'—':UiUtil.escapeHtml(r.position))+'</small></td><td><button class="ap-analyze" type="button" data-aw-student="'+UiUtil.escapeAttr(r.ra)+'">Analisar</button></td></tr>';}).join('')+'</tbody></table>';});
+        document.getElementById('awTableTitle').textContent='Registros de premiação';document.getElementById('awTableMeta').textContent=sorted.length+' premiação(ões) após os filtros';document.getElementById('awTableHost').innerHTML=html||'<div class="ap-empty">Nenhum registro encontrado com os filtros atuais.</div>';
+      }
+      document.querySelectorAll('[data-aw-student]').forEach(function(b){b.addEventListener('click',function(){openAnalysis_(b.dataset.awStudent);});});
+    }
+
+    function setMode_(mode) {
+      state.mode=mode;document.getElementById('awModeRecords').classList.toggle('is-active',mode==='records');document.getElementById('awModeStudents').classList.toggle('is-active',mode==='students');renderTable_();
+    }
+
+    function clearFilters_() {
+      initializeFilters_(); document.getElementById('awSearch').value=''; renderAll_();
+    }
+
+    function studentAggregateByRa_(ra) { return aggregate_(filteredRows_()).find(function(s){return s.ra===ra;})||null; }
+
+    function classificationSnapshot_(student) {
+      var sort=document.getElementById('awSort').value, label='Premiação mais recente', value=null;
+      if(sort==='count'){label='Quantidade de premiações';value=student.count;}
+      else if(sort==='avg'){label='Média dos registros';value=student.average;}
+      else if(sort==='freq'){label='Frequência média';value=student.frequency;}
+      else if(sort==='name'){label='Ordenação nominal';}
+      var ordered=sortAggregates_(aggregate_(filteredRows_())),position=ordered.findIndex(function(s){return s.ra===student.ra;});
+      return {label:label,value:value,position:position>=0?position+1:null};
+    }
+
+    function openAnalysis_(ra) {
+      var student=studentAggregateByRa_(ra);if(!student)return;
+      state.selectedRa=ra;var content=document.querySelector('.aw-content');state.listScrollTop=content.scrollTop;
+      document.getElementById('awListView').hidden=true;document.getElementById('awAnalysisView').hidden=false;
+      renderAnalysis_(ra);content.scrollTop=0;
+    }
+
+    function backToList_() {
+      state.selectedRa='';document.getElementById('awAnalysisView').hidden=true;document.getElementById('awListView').hidden=false;
+      var content=document.querySelector('.aw-content');requestAnimationFrame(function(){content.scrollTop=state.listScrollTop;});
+    }
+
+    function renderAnalysis_(ra) {
+      var student=studentAggregateByRa_(ra);if(!student){backToList_();return;}
+      var rows=student.records.slice().sort(function(a,b){return recordDate_(b).localeCompare(recordDate_(a));});
+      document.getElementById('awStudentName').textContent=student.name;document.getElementById('awStudentMeta').textContent=student.ra+' · '+student.course;
+      var values=[['Premiações no recorte',student.count,'Após os filtros atuais'],['Tipos de prêmio',student.types,'Tipos distintos'],['Média dos registros',formatNumber_(student.average,1),'Somente registros com média'],['Frequência média',student.frequency===null?'—':formatNumber_(student.frequency,1)+'%','Somente registros com frequência'],['Prêmios complementares',student.additionalCount,'Concedidos nesta mesa em ciclos anteriores']];
+      document.getElementById('awSummary').innerHTML=values.map(function(v){return '<div class="aw-summary-card"><label>'+UiUtil.escapeHtml(v[0])+'</label><strong>'+UiUtil.escapeHtml(v[1])+'</strong><small>'+UiUtil.escapeHtml(v[2])+'</small></div>';}).join('');
+      document.getElementById('awHistoryHost').innerHTML='<table class="aw-history-table"><thead><tr><th>Ano</th><th>Prêmio</th><th>Contexto</th><th>Média</th><th>Frequência</th><th>Posição</th><th>Justificativa</th></tr></thead><tbody>'+rows.map(function(r){return '<tr class="'+(isAdditional_(r)?'is-additional':'')+'"><td>'+UiUtil.escapeHtml(r.year||'—')+'</td><td><strong>'+UiUtil.escapeHtml(r.prize)+'</strong>'+additionalBadge_(r)+'</td><td>'+recordContextHtml_(r)+'</td><td>'+formatNumber_(r.average,1)+'</td><td>'+formatNumber_(r.frequency,1)+(r.frequency!==null?'%':'')+'</td><td>'+(r.position===null||r.position===undefined?'—':UiUtil.escapeHtml(r.position))+'</td><td>'+UiUtil.escapeHtml(r.justification||'')+'</td></tr>';}).join('')+'</tbody></table>';
+      renderAwardEditor_(student);
+    }
+
+    function renderAwardEditor_(student) {
+      var host=document.getElementById('awAwardEditor'),status=effectiveStatus_();
+      if(status==='PUBLICADO'){
+        host.innerHTML='<div class="aw-locked"><i class="bi bi-lock-fill"></i><div><strong>Último lote publicado.</strong><small>Use “Iniciar nova apuração” no topo para conceder um novo prêmio complementar.</small></div></div>';return;
+      }
+      var existingDraftIds=drafts_().filter(function(d){return d.ra===student.ra;}).map(function(d){return d.prizeId;}).concat(state.pending.filter(function(d){return d.ra===student.ra;}).map(function(d){return d.prizeId;}));
+      var prizes=(state.workspace.prizes||[]).filter(function(p){return existingDraftIds.indexOf(p.id)<0;});
+      var snap=classificationSnapshot_(student),context=parsePeriodClass_(document.getElementById('awPeriodClassFilter').value);
+      host.innerHTML='<div class="aw-form-field"><label>Prêmio *</label><select id="awNewPrize" class="ap-control">'+prizes.map(function(p){return '<option value="'+UiUtil.escapeAttr(p.id)+'">'+UiUtil.escapeHtml(p.description)+'</option>';}).join('')+'</select></div><div class="aw-form-field"><label>Justificativa *</label><textarea id="awJustification" class="ap-control" placeholder="Informe a justificativa da concessão"></textarea></div><div class="aw-snapshot"><strong>Fotografia da análise</strong><span>'+student.count+' premiação(ões) no recorte · '+student.types+' tipo(s) · média '+formatNumber_(student.average,1)+(student.frequency!==null?' · frequência '+formatNumber_(student.frequency,1)+'%':'')+'</span><span>Ordenação atual: '+UiUtil.escapeHtml(snap.label)+(snap.value===null?'':' = '+formatNumber_(snap.value,1))+' · posição '+(snap.position||'—')+(context.coursePeriod||context.classGroup?' · contexto '+UiUtil.escapeHtml(periodClassLabelFromParts_(context.coursePeriod,context.classGroup)):'')+'</span></div><div id="awEditorWarning"></div><div class="aw-editor-actions"><button id="awStagePrize" type="button" class="ap-decision-btn" '+(prizes.length?'':'disabled')+'>Adicionar ao lote</button></div>'+(prizes.length?'':'<div class="ap-warning">Todos os prêmios ativos já estão em apuração para este estudante.</div>');
+      var button=document.getElementById('awStagePrize');if(button)button.addEventListener('click',function(){stageAward_(student);});
+    }
+
+    function stageAward_(student) {
+      if(state.loading||effectiveStatus_()!=='EM APURAÇÃO')return;
+      var prizeId=document.getElementById('awNewPrize').value,reason=String(document.getElementById('awJustification').value||'').trim(),warning=document.getElementById('awEditorWarning');warning.innerHTML='';
+      if(!prizeId){warning.innerHTML='<div class="ap-warning">Selecione um prêmio.</div>';return;}if(!reason){warning.innerHTML='<div class="ap-warning">Informe a justificativa da premiação.</div>';return;}
+      var prize=(state.workspace.prizes||[]).find(function(p){return p.id===prizeId;});if(!prize)return;
+      if(state.pending.concat(drafts_()).some(function(p){return p.ra===student.ra&&p.prizeId===prize.id;}))return;
+      var snap=classificationSnapshot_(student),context=parsePeriodClass_(document.getElementById('awPeriodClassFilter').value);
+      state.pending.push({id:'local-'+Date.now()+'-'+Math.random(),ra:student.ra,name:student.name,course:student.course,coursePeriod:context.coursePeriod,classGroup:context.classGroup,language:'',prizeId:prize.id,prize:prize.description,classificationIndicator:snap.label,classificationValue:snap.value,position:snap.position,justification:reason});
+      state.newCycle=true;document.getElementById('awJustification').value='';renderAll_();showMessage_('success','Prêmio complementar incluído. O lote contém '+state.pending.length+' premiação(ões) aguardando salvamento.');
+    }
+
+    function decisionPayload_() {
+      return { awardees: state.pending.map(function(p){return {ra:p.ra,name:p.name,course:p.course,coursePeriod:p.coursePeriod,classGroup:p.classGroup,language:p.language,prizeId:p.prizeId,classificationIndicator:p.classificationIndicator,classificationValue:p.classificationValue,position:p.position,justification:p.justification};}) };
+    }
+
+    async function savePending_() {
+      if(state.loading)return false;if(!state.pending.length)return true;state.loading=true;setBusy_(true);
+      var submittedIds=state.pending.map(function(p){return p.id;});
+      var prizeRevision=state.prizeRevision;
+      try{state.workspace=await ApiClient.authenticatedCall('saveAwardeeWorkspaceBatch',decisionPayload_());if(prizeRevision!==state.prizeRevision)state.workspace.prizes=complementaryPrizes_();state.pending=state.pending.filter(function(p){return submittedIds.indexOf(p.id)<0;});state.newCycle=state.pending.length>0;rebuildContextualFilters_();renderAll_();showMessage_('success',submittedIds.length+' premiação(ões) salva(s) em lote.');return true;}
+      catch(error){showMessage_('error',UiUtil.actionableErrorMessage(error));return false;}
+      finally{state.loading=false;setBusy_(false);}
+    }
+
+    async function removeSavedDraft_(id) {
+      if(state.loading)return;state.loading=true;
+      try{state.workspace=await ApiClient.authenticatedCall('deleteAwardeeWorkspaceDraft',id);if(!drafts_().length)state.newCycle=true;rebuildContextualFilters_();renderAll_();showMessage_('success','Premiação retirada da apuração.');}
+      catch(error){showMessage_('error',UiUtil.actionableErrorMessage(error));}
+      finally{state.loading=false;}
+    }
+
+    async function publish_() {
+      if(state.pending.length){state.guardMode='publish';showGuard_('Premiações não salvas','Salve as premiações complementares antes de publicar o resultado.');return;}
+      if(!drafts_().length){showMessage_('warning','Não há premiações complementares salvas para publicar.');return;}
+      if(state.loading)return;state.loading=true;
+      try{state.workspace=await ApiClient.authenticatedCall('publishAwardeeWorkspace');state.newCycle=false;rebuildContextualFilters_();renderAll_();showMessage_('success','Resultado publicado. Os prêmios complementares passaram a integrar o histórico de premiados.');}
+      catch(error){showMessage_('error',UiUtil.actionableErrorMessage(error));}
+      finally{state.loading=false;}
+    }
+
+    function showGuard_(title,text){document.getElementById('awGuardTitle').textContent=title;document.getElementById('awGuardText').textContent=text;document.getElementById('awGuard').hidden=false;}
+    function hideGuard_(){document.getElementById('awGuard').hidden=true;state.guardMode='';state.guardedMenuId='';}
+    async function saveFromGuard_(){var mode=state.guardMode,target=state.guardedMenuId;var ok=await savePending_();if(!ok)return;document.getElementById('awGuard').hidden=true;state.guardMode='';state.guardedMenuId='';if(mode==='publish')publish_();else if(mode==='navigation'&&target){var el=document.getElementById(target);if(el)el.click();}else if(mode==='logout')showMessage_('warning','Premiações salvas. Clique novamente no usuário para encerrar a sessão.');}
+    function hasPendingDecisions(){return state.pending.length>0;}
+    function requestLogout(){state.guardMode='logout';showGuard_('Premiações não salvas','Salve as premiações complementares antes de encerrar a sessão.');}
+
+    function setBusy_(busy){
+      ['awSavePending','awStagePrize','awNewPrize','awJustification','awTransition','awGuardSave'].forEach(function(id){var el=document.getElementById(id);if(el)el.disabled=Boolean(busy);});
+      document.querySelectorAll('[data-aw-local],[data-aw-saved]').forEach(function(el){el.disabled=Boolean(busy);});
+      if(!busy){var stage=document.getElementById('awStagePrize'),select=document.getElementById('awNewPrize');if(stage)stage.disabled=!select||!select.options.length||effectiveStatus_()!=='EM APURAÇÃO';}
+    }
+    function complementaryPrizes_(){return state.latestPrizes.filter(function(p){return p.status==='ATIVA'&&p.category==='COMPLEMENTAR';});}
+    function refreshPrizes(prizes){
+      state.latestPrizes=prizes||[];state.prizeRevision++;
+      if(!state.workspace)return;
+      state.workspace.prizes=complementaryPrizes_();
+      var reason=document.getElementById('awJustification'),select=document.getElementById('awNewPrize');
+      var previousReason=reason?reason.value:'',previousPrize=select?select.value:'';
+      var byId={};(prizes||[]).forEach(function(p){byId[p.id]=p;});
+      state.pending.forEach(function(p){if(byId[p.prizeId])p.prize=byId[p.prizeId].description;});
+      renderAll_();
+      reason=document.getElementById('awJustification');select=document.getElementById('awNewPrize');
+      if(reason)reason.value=previousReason;
+      if(select&&Array.prototype.some.call(select.options,function(o){return o.value===previousPrize;}))select.value=previousPrize;
+      setBusy_(state.loading);
+    }
+    return Object.freeze({init:init,open:open,hasPendingDecisions:hasPendingDecisions,requestLogout:requestLogout,refreshPrizes:refreshPrizes});
+  })();
+</script>

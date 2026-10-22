@@ -1,0 +1,838 @@
+<script>
+  /** Model do módulo Gerenciar Dados. */
+  var DataImportPanelModel = (function () {
+    var state = {
+      panel: null,
+      adminContext: null,
+      busy: false,
+      validated: false,
+      validation: null,
+      jobId: '',
+      availableDataSets: [],
+      setYearLoaded: null,
+      selectedDataSetKey: ''
+    };
+
+    function reset() {
+      state.busy = false;
+      state.validated = false;
+      state.validation = null;
+      state.jobId = '';
+      state.availableDataSets = [];
+      state.setYearLoaded = null;
+      state.selectedDataSetKey = '';
+    }
+
+    function schema(type) {
+      var schemas = state.adminContext && state.adminContext.schemas || [];
+      return schemas.find(function (item) { return item.type === type; }) || null;
+    }
+
+    function selectedDataSet() {
+      var key = state.selectedDataSetKey;
+      return (state.availableDataSets || []).find(function (item) { return item.key === key; }) || null;
+    }
+
+    return Object.freeze({ state: state, reset: reset, schema: schema, selectedDataSet: selectedDataSet });
+  })();
+
+  /** View do módulo Gerenciar Dados. */
+  var DataImportPanelView = (function () {
+    function render() {
+      var context = DataImportPanelModel.state.adminContext;
+      var operations = context && context.operations || [];
+      var schemas = context && context.schemas || [];
+      var container = document.getElementById('sidePanelContent');
+
+      container.innerHTML = '<section class="data-import-section">' +
+        '<div class="data-import-intro">' +
+          '<strong>Gerenciamento orientado dos conjuntos</strong>' +
+          '<span>O sistema conduz a operação por etapas, compara o arquivo com a base e informa o contexto encontrado antes de qualquer gravação.</span>' +
+        '</div>' +
+
+        '<div class="data-step-card" id="dataOperationStep">' +
+          '<div class="data-step-title"><span>1</span><div><strong>O que deseja fazer?</strong><small>Novo, atualizar ou excluir um conjunto de dados.</small></div></div>' +
+          '<select id="dataOperation" class="form-select">' +
+            '<option value="">Selecione</option>' +
+            operations.map(function (item) { return '<option value="' + UiUtil.escapeAttr(item.value) + '">' + UiUtil.escapeHtml(item.label) + '</option>'; }).join('') +
+          '</select>' +
+        '</div>' +
+
+        '<div id="dataTypeStep" class="data-step-card" hidden>' +
+          '<div class="data-step-title"><span>2</span><div><strong>Qual tipo de conjunto será criado?</strong><small>Anual, Semestral ou CENID.</small></div></div>' +
+          '<select id="dataType" class="form-select">' +
+            '<option value="">Selecione</option>' +
+            schemas.map(function (item) { return '<option value="' + UiUtil.escapeAttr(item.type) + '">' + UiUtil.escapeHtml(item.label) + '</option>'; }).join('') +
+          '</select>' +
+        '</div>' +
+
+        '<div id="dataPeriodStep" class="data-step-card" hidden>' +
+          '<div class="data-step-title"><span>3</span><div><strong>Qual período?</strong><small id="dataPeriodHelp">Informe o ano.</small></div></div>' +
+          '<div class="data-period-grid">' +
+            '<div><label class="form-label normal-label" for="dataYear">Ano</label><input id="dataYear" class="form-control" type="number" min="1900" max="2200" step="1" placeholder="2026"></div>' +
+            '<div id="dataSemesterWrap" hidden><label class="form-label normal-label" for="dataSemester">Semestre</label><select id="dataSemester" class="form-select"><option value="">Selecione</option><option value="1">1º semestre</option><option value="2">2º semestre</option></select></div>' +
+          '</div>' +
+        '</div>' +
+
+        '<div id="dataExistingYearStep" class="data-step-card" hidden>' +
+          '<div class="data-step-title"><span>2</span><div><strong>De qual ano?</strong><small id="dataExistingYearHelp">Informe o ano para localizar os conjuntos disponíveis.</small></div></div>' +
+          '<div class="data-period-grid data-period-grid-single"><div><label class="form-label normal-label" for="dataExistingYear">Ano</label><input id="dataExistingYear" class="form-control" type="number" min="1900" max="2200" step="1" placeholder="2026"></div></div>' +
+          '<div id="dataSetSearchActions" class="data-inline-actions" hidden><button id="btnDataFindSets" type="button" class="btn btn-outline-success btn-sm"><i class="bi bi-search me-1"></i>Mostrar conjuntos do ano</button></div>' +
+        '</div>' +
+
+        '<div id="dataExistingSetsStep" class="data-step-card" hidden>' +
+          '<div class="data-step-title"><span>3</span><div><strong id="dataExistingSetsTitle">Qual conjunto?</strong><small>Somente conjuntos realmente existentes no ano informado são exibidos.</small></div></div>' +
+          '<div id="dataExistingSetsList"></div>' +
+          '<div id="dataDeleteActions" class="data-inline-actions" hidden><button id="btnDataDeleteInline" type="button" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash me-1"></i>Excluir conjunto selecionado</button></div>' +
+          '<div id="dataDeleteConfirmation" class="data-inline-confirm" hidden></div>' +
+        '</div>' +
+
+        '<div id="dataFilesStep" class="data-step-card" hidden>' +
+          '<div class="data-step-title"><span>4</span><div><strong>Arquivos e cabeçalho</strong><small>Selecione um ou mais arquivos XLS, XLSX ou XLSM.</small></div></div>' +
+          '<div class="mb-3"><label class="form-label normal-label" for="dataHeaderRow">Linha do cabeçalho</label><input id="dataHeaderRow" class="form-control" type="number" min="1" max="1000" step="1" value="' + UiUtil.escapeAttr(context && context.defaultHeaderRow || 1) + '"><div class="form-text">A linha 1 é utilizada por padrão. Altere somente quando houver conteúdo antes do cabeçalho.</div></div>' +
+          '<div><label class="form-label normal-label" for="dataFiles">Planilhas</label><input id="dataFiles" class="form-control" type="file" accept=".xls,.xlsx,.xlsm" multiple><div id="dataFileSelection" class="form-text">Nenhum arquivo selecionado.</div></div>' +
+          '<div id="dataValidateActions" class="data-inline-actions" hidden><button id="btnDataValidateInline" type="button" class="btn btn-outline-success btn-sm"><i class="bi bi-clipboard-check me-1"></i>Validar e comparar</button></div>' +
+        '</div>' +
+
+        '<div id="dataValidationStep" class="data-step-card" hidden>' +
+          '<div class="data-step-title"><span>5</span><div><strong>Diagnóstico da operação</strong><small>Revise a estrutura, os dados e o contexto identificado pelo sistema.</small></div></div>' +
+          '<div id="dataValidationResult"></div>' +
+          '<div id="dataValidationActions" class="data-inline-actions" hidden><button id="btnDataExecuteInline" type="button" class="btn btn-success btn-sm"><i class="bi bi-play-circle me-1"></i>Definir execução</button></div>' +
+          '<div id="dataImportConfirmation" class="data-inline-confirm" hidden></div>' +
+        '</div>' +
+
+        '<div id="dataRestartActions" class="data-flow-footer" hidden><button id="btnDataRestartInline" type="button" class="btn btn-link btn-sm"><i class="bi bi-arrow-counterclockwise me-1"></i>Recomeçar</button></div>' +
+      '</section>';
+
+      bindFormEvents_();
+      syncQuestions_();
+    }
+
+    function bindFormEvents_() {
+      document.getElementById('dataOperation').addEventListener('change', function () {
+        DataImportPanelController.resetAfterOperationChange();
+        syncQuestions_();
+      });
+
+      document.getElementById('dataType').addEventListener('change', function () {
+        DataImportPanelController.invalidateValidation();
+        syncQuestions_();
+      });
+
+      ['dataYear', 'dataSemester', 'dataHeaderRow'].forEach(function (id) {
+        var el = document.getElementById(id);
+        el.addEventListener(id === 'dataSemester' ? 'change' : 'input', function () {
+          DataImportPanelController.invalidateValidation();
+          syncQuestions_();
+        });
+      });
+
+      document.getElementById('dataExistingYear').addEventListener('input', function () {
+        DataImportPanelController.resetSetResults();
+        syncQuestions_();
+      });
+
+      var files = document.getElementById('dataFiles');
+      files.addEventListener('change', function () {
+        DataImportPanelController.invalidateValidation();
+        var names = Array.prototype.map.call(files.files || [], function (file) { return file.name; });
+        document.getElementById('dataFileSelection').textContent = names.length ? names.join(' • ') : 'Nenhum arquivo selecionado.';
+        syncQuestions_();
+      });
+
+      document.getElementById('btnDataFindSets').addEventListener('click', DataImportPanelController.loadExistingSets);
+      document.getElementById('btnDataValidateInline').addEventListener('click', DataImportPanelController.validate);
+      document.getElementById('btnDataExecuteInline').addEventListener('click', DataImportPanelController.requestImportExecution);
+      document.getElementById('btnDataDeleteInline').addEventListener('click', DataImportPanelController.requestDeleteExecution);
+      document.getElementById('btnDataRestartInline').addEventListener('click', DataImportPanelController.reset);
+    }
+
+    function value_(id) {
+      var el = document.getElementById(id);
+      return el ? String(el.value || '').trim() : '';
+    }
+
+    function validYear_(value) {
+      var year = Number(value);
+      return Number.isInteger(year) && year >= 1900 && year <= 2200;
+    }
+
+    function operation_() {
+      return value_('dataOperation');
+    }
+
+    function syncQuestions_() {
+      var operation = operation_();
+      var isNew = operation === 'NOVO';
+      var isUpdate = operation === 'ATUALIZAR';
+      var isDelete = operation === 'EXCLUIR';
+      var type = value_('dataType');
+      var schema = DataImportPanelModel.schema(type);
+      var selectedSet = DataImportPanelModel.selectedDataSet();
+
+      document.getElementById('dataTypeStep').hidden = !isNew;
+      document.getElementById('dataPeriodStep').hidden = !(isNew && schema);
+      document.getElementById('dataExistingYearStep').hidden = !(isUpdate || isDelete);
+      document.getElementById('dataExistingSetsStep').hidden = !(isUpdate || isDelete) || DataImportPanelModel.state.setYearLoaded === null;
+      document.getElementById('dataSemesterWrap').hidden = !(schema && schema.requiresSemester);
+      document.getElementById('dataRestartActions').hidden = !operation;
+
+      if (schema) {
+        document.getElementById('dataPeriodHelp').textContent = schema.requiresSemester
+          ? 'Informe o ano e o semestre do novo conjunto.'
+          : 'Informe o ano do novo conjunto.';
+      }
+      if (!schema || !schema.requiresSemester) document.getElementById('dataSemester').value = '';
+
+      document.getElementById('dataExistingYearHelp').textContent = isDelete
+        ? 'Informe o ano e o sistema mostrará os conjuntos que podem ser excluídos.'
+        : 'Informe o ano e o sistema mostrará os conjuntos disponíveis para atualização.';
+      document.getElementById('dataExistingSetsTitle').textContent = isDelete
+        ? 'Qual conjunto deseja excluir?'
+        : 'Qual conjunto deseja atualizar?';
+
+      var newPeriodReady = Boolean(isNew && schema && validYear_(value_('dataYear')) && (!schema.requiresSemester || ['1', '2'].indexOf(value_('dataSemester')) >= 0));
+      var updateReady = Boolean(isUpdate && selectedSet);
+      document.getElementById('dataFilesStep').hidden = !(newPeriodReady || updateReady);
+
+      var files = document.getElementById('dataFiles');
+      var filesSelected = files && files.files && files.files.length > 0;
+      var headerRow = Number(value_('dataHeaderRow') || 1);
+      document.getElementById('dataValidateActions').hidden = !((newPeriodReady || updateReady) && filesSelected && Number.isInteger(headerRow) && headerRow >= 1 && headerRow <= 1000 && !DataImportPanelModel.state.validated);
+
+      var existingYear = value_('dataExistingYear');
+      document.getElementById('dataSetSearchActions').hidden = !((isUpdate || isDelete) && validYear_(existingYear) && Number(DataImportPanelModel.state.setYearLoaded) !== Number(existingYear));
+
+      document.getElementById('dataDeleteActions').hidden = !(isDelete && selectedSet);
+      setInteractiveState_();
+    }
+
+    function formValues() {
+      var operation = operation_();
+      var selectedSet = DataImportPanelModel.selectedDataSet();
+      var dataType = operation === 'ATUALIZAR' && selectedSet ? selectedSet.dataType : value_('dataType');
+      var year = operation === 'ATUALIZAR' && selectedSet ? selectedSet.year : value_('dataYear');
+      var semester = operation === 'ATUALIZAR' && selectedSet ? (selectedSet.semester || '') : value_('dataSemester');
+      return {
+        operation: operation,
+        dataType: dataType,
+        year: year,
+        semester: semester,
+        headerRow: Number(value_('dataHeaderRow') || 1),
+        files: document.getElementById('dataFiles') ? Array.prototype.slice.call(document.getElementById('dataFiles').files || []) : []
+      };
+    }
+
+    function existingYear() {
+      return value_('dataExistingYear');
+    }
+
+    function setInteractiveState_() {
+      var busy = DataImportPanelModel.state.busy;
+      document.querySelectorAll('#sidePanelContent input, #sidePanelContent select, #sidePanelContent button').forEach(function (el) {
+        el.disabled = Boolean(busy);
+      });
+      var content = document.getElementById('sidePanelContent');
+      if (content) content.setAttribute('aria-busy', busy ? 'true' : 'false');
+    }
+
+    function setBusy(busy) {
+      DataImportPanelModel.state.busy = Boolean(busy);
+      setInteractiveState_();
+    }
+
+    function diagnosisCopy_(diagnosis) {
+      if (!diagnosis) return '';
+      var messages = {
+        NOVO: 'Não há um conjunto correspondente com dados na base. O arquivo tem contexto de novo conjunto.',
+        ATUALIZACAO: 'Os RAs do arquivo já estão representados no conjunto e o conteúdo tem contexto de atualização.',
+        EXPANSAO: 'O conjunto já existe, mas nenhum RA do arquivo foi encontrado nele. O efeito esperado é expandir o conjunto com novos registros.',
+        ATUALIZACAO_EXPANSAO: 'Parte dos RAs já existe e parte é nova, ou foram encontradas novas linhas dentro de RAs existentes. O efeito esperado combina atualização e expansão.',
+        INDETERMINADO: 'Não foi possível determinar o contexto com segurança, principalmente pela ausência de RAs utilizáveis no arquivo.'
+      };
+      return messages[diagnosis.diagnosisType] || 'O sistema analisou o contexto dos dados informados.';
+    }
+
+    function renderValidation(validation) {
+      var step = document.getElementById('dataValidationStep');
+      var target = document.getElementById('dataValidationResult');
+      step.hidden = false;
+      var warnings = validation.warnings || [];
+      var diagnosis = validation.diagnosis || {};
+      var preview = diagnosis.preview || {};
+      var fileCards = (validation.files || []).map(function (file) {
+        var badgeClass = (file.warningCount || 0) ? 'data-badge-warning' : 'data-badge-ok';
+        return '<div class="data-file-card">' +
+          '<div><strong>' + UiUtil.escapeHtml(file.name) + '</strong><small>' + UiUtil.escapeHtml(file.sheetName || '-') + ' · ' + Number(file.rowCount || 0) + ' linha(s)</small></div>' +
+          '<span class="data-soft-badge ' + badgeClass + '">' + Number(file.warningCount || 0) + ' aviso(s)</span>' +
+        '</div>';
+      }).join('');
+
+      var mismatchClass = diagnosis.operationMismatch ? ' data-context-mismatch' : '';
+      var operationLine = diagnosis.operationMismatch
+        ? '<div class="data-context-operation"><span>Você escolheu <strong>' + UiUtil.escapeHtml(diagnosis.selectedOperation || '-') + '</strong>.</span><span>O sistema recomenda <strong>' + UiUtil.escapeHtml(diagnosis.recommendedOperation || '-') + '</strong>.</span></div>'
+        : '<div class="data-context-operation"><span>A operação escolhida é compatível com o contexto encontrado.</span></div>';
+
+      var contextCard = '<div class="data-context-card' + mismatchClass + '">' +
+        '<div class="data-context-head"><span>Contexto identificado</span><strong>' + UiUtil.escapeHtml(diagnosis.diagnosisLabel || '-') + '</strong></div>' +
+        '<p>' + UiUtil.escapeHtml(diagnosisCopy_(diagnosis)) + '</p>' +
+        operationLine +
+        '<div class="data-context-metrics">' +
+          '<div><span>RAs no arquivo</span><strong>' + Number(diagnosis.sourceRaCount || 0) + '</strong></div>' +
+          '<div><span>RAs em comum</span><strong>' + Number(diagnosis.overlappingRaCount || 0) + '</strong></div>' +
+          '<div><span>RAs novos</span><strong>' + Number(diagnosis.newRaCount || 0) + '</strong></div>' +
+          '<div><span>Similaridade por RA</span><strong>' + Number(diagnosis.similarityPercent || 0) + '%</strong></div>' +
+        '</div>' +
+        '<div class="data-context-impact">' +
+          '<span><b>' + Number(preview.updatedRows || 0) + '</b> linha(s) com alteração</span>' +
+          '<span><b>' + Number(preview.insertedRows || 0) + '</b> nova(s) linha(s)</span>' +
+          '<span><b>' + Number(preview.unchangedRows || 0) + '</b> sem alteração</span>' +
+          '<span><b>0</b> linha(s) removida(s) em atualização</span>' +
+        '</div>' +
+      '</div>';
+
+      var warningList = warnings.length
+        ? '<div class="data-warning-list">' + warnings.map(function (warning) {
+            var cls = warning.level === 'info' ? 'data-warning-info' : 'data-warning-warning';
+            var icon = warning.level === 'info' ? 'bi-info-circle' : 'bi-exclamation-triangle';
+            return '<div class="data-warning-item ' + cls + '"><i class="bi ' + icon + '"></i><span>' + UiUtil.escapeHtml(warning.message) + '</span></div>';
+          }).join('') + '</div>'
+        : '<div class="data-state-card data-state-ok"><i class="bi bi-check-circle"></i><span>Nenhuma inconsistência estrutural ou de preenchimento foi encontrada nos arquivos.</span></div>';
+
+      target.innerHTML = '<div class="data-validation-summary">' +
+          '<div><span>Linhas preparadas</span><strong>' + Number(validation.totalRows || 0) + '</strong></div>' +
+          '<div><span>Linhas já no conjunto</span><strong>' + Number(diagnosis.existingRowCount || 0) + '</strong></div>' +
+          '<div><span>Avisos</span><strong>' + warnings.length + '</strong></div>' +
+        '</div>' + contextCard + fileCards + warningList +
+        '<div class="data-validation-note"><i class="bi bi-info-circle"></i><span>O diagnóstico orienta a decisão, mas não bloqueia a operação. Você poderá manter sua escolha inicial ou adotar a operação recomendada quando houver divergência.</span></div>';
+
+      document.getElementById('dataValidationActions').hidden = false;
+      document.getElementById('dataImportConfirmation').hidden = true;
+      document.getElementById('btnDataExecuteInline').textContent = diagnosis.operationMismatch ? 'Escolher como executar' : (warnings.length ? 'Prosseguir com os avisos' : 'Executar operação');
+    }
+
+    function operationLabel_(operation) {
+      return operation === 'NOVO' ? 'Novo' : (operation === 'ATUALIZAR' ? 'Atualizar' : operation);
+    }
+
+    function showImportConfirmation(validation) {
+      var diagnosis = validation.diagnosis || {};
+      var warnings = validation.warnings || [];
+      var box = document.getElementById('dataImportConfirmation');
+      box.hidden = false;
+
+      var buttons = '';
+      if (diagnosis.operationMismatch && diagnosis.recommendedOperation && diagnosis.selectedOperation) {
+        buttons = '<button id="btnDataUseRecommended" type="button" class="btn btn-success btn-sm">Usar ' + UiUtil.escapeHtml(operationLabel_(diagnosis.recommendedOperation)) + ' (recomendado)</button>' +
+          '<button id="btnDataKeepChoice" type="button" class="btn btn-outline-secondary btn-sm">Manter ' + UiUtil.escapeHtml(operationLabel_(diagnosis.selectedOperation)) + '</button>';
+      } else {
+        buttons = '<button id="btnDataConfirmImport" type="button" class="btn btn-success btn-sm">Confirmar ' + UiUtil.escapeHtml(operationLabel_(diagnosis.selectedOperation || validation.values.operation)) + '</button>';
+      }
+
+      box.innerHTML = '<div class="data-inline-confirm-copy">' +
+          '<i class="bi bi-shield-check"></i><div><strong>Defina a execução</strong><span>' +
+          (diagnosis.operationMismatch
+            ? 'A intenção inicial e o contexto encontrado são diferentes. A decisão final é sua.'
+            : (warnings.length ? 'Você revisou os avisos e pode decidir continuar.' : 'O contexto e a operação escolhida são compatíveis.')) +
+          '</span></div></div>' +
+        '<div class="data-inline-actions">' + buttons + '<button id="btnDataCancelImport" type="button" class="btn btn-light btn-sm">Voltar</button></div>';
+
+      var recommended = document.getElementById('btnDataUseRecommended');
+      var keep = document.getElementById('btnDataKeepChoice');
+      var confirm = document.getElementById('btnDataConfirmImport');
+      if (recommended) recommended.addEventListener('click', function () { DataImportPanelController.executeImport(diagnosis.recommendedOperation); });
+      if (keep) keep.addEventListener('click', function () { DataImportPanelController.executeImport(diagnosis.selectedOperation); });
+      if (confirm) confirm.addEventListener('click', function () { DataImportPanelController.executeImport(diagnosis.selectedOperation || validation.values.operation); });
+      document.getElementById('btnDataCancelImport').addEventListener('click', function () { box.hidden = true; });
+    }
+
+    function renderExistingSets(year, items, operation) {
+      var step = document.getElementById('dataExistingSetsStep');
+      var list = document.getElementById('dataExistingSetsList');
+      step.hidden = false;
+      document.getElementById('dataDeleteConfirmation').hidden = true;
+      document.getElementById('dataDeleteActions').hidden = true;
+
+      if (!items.length) {
+        list.innerHTML = '<div class="data-state-card data-state-neutral"><i class="bi bi-database"></i><span>Nenhum conjunto de dados foi localizado para ' + UiUtil.escapeHtml(year) + '.</span></div>';
+        return;
+      }
+
+      list.innerHTML = '<div class="data-choice-list">' + items.map(function (item) {
+        return '<label class="data-choice-card"><input type="radio" name="dataExistingSet" value="' + UiUtil.escapeAttr(item.key) + '"><span><strong>' + UiUtil.escapeHtml(item.label) + '</strong><small>' + Number(item.rowCount || 0) + ' linha(s) · ' + Number(item.raCount || 0) + ' RA(s)</small></span></label>';
+      }).join('') + '</div>';
+
+      document.querySelectorAll('input[name="dataExistingSet"]').forEach(function (radio) {
+        radio.addEventListener('change', function () {
+          DataImportPanelController.selectExistingSet(radio.value);
+          if (operation === 'EXCLUIR') document.getElementById('dataDeleteActions').hidden = false;
+          document.getElementById('dataDeleteConfirmation').hidden = true;
+          syncQuestions_();
+        });
+      });
+    }
+
+    function showDeleteConfirmation(item) {
+      var box = document.getElementById('dataDeleteConfirmation');
+      box.hidden = false;
+      box.innerHTML = '<div class="data-inline-confirm-copy data-inline-confirm-danger">' +
+          '<i class="bi bi-trash"></i><div><strong>Excluir ' + UiUtil.escapeHtml(item.label) + '?</strong><span>Serão removidas ' + Number(item.rowCount || 0) + ' linha(s). Esta é a única operação deste módulo que remove linhas.</span></div></div>' +
+        '<div class="data-inline-actions"><button id="btnDataConfirmDelete" type="button" class="btn btn-danger btn-sm">Confirmar exclusão</button><button id="btnDataCancelDelete" type="button" class="btn btn-light btn-sm">Voltar</button></div>';
+      document.getElementById('btnDataConfirmDelete').addEventListener('click', DataImportPanelController.executeDelete);
+      document.getElementById('btnDataCancelDelete').addEventListener('click', function () { box.hidden = true; });
+    }
+
+    function renderResult(result) {
+      var target = document.getElementById('dataValidationResult');
+      var step = document.getElementById('dataValidationStep');
+      step.hidden = false;
+      var pieces = [];
+      if (result.insertedRows !== undefined) pieces.push('<div><span>Inseridas</span><strong>' + Number(result.insertedRows || 0) + '</strong></div>');
+      if (result.updatedRows !== undefined) pieces.push('<div><span>Atualizadas</span><strong>' + Number(result.updatedRows || 0) + '</strong></div>');
+      if (result.unchangedRows !== undefined) pieces.push('<div><span>Sem alteração</span><strong>' + Number(result.unchangedRows || 0) + '</strong></div>');
+      if (result.changedCells !== undefined) pieces.push('<div><span>Campos alterados</span><strong>' + Number(result.changedCells || 0) + '</strong></div>');
+      var operationText = result.executedOperation ? ' Executada como ' + operationLabel_(result.executedOperation) + '.' : '';
+      target.innerHTML = '<div class="data-state-card data-state-ok"><i class="bi bi-check-circle-fill"></i><span>Operação concluída com sucesso.' + UiUtil.escapeHtml(operationText) + '</span></div>' +
+        '<div class="data-validation-summary data-validation-summary-result">' + pieces.join('') + '</div>';
+      document.getElementById('dataValidationActions').hidden = true;
+      document.getElementById('dataImportConfirmation').hidden = true;
+    }
+
+    return Object.freeze({
+      render: render,
+      formValues: formValues,
+      existingYear: existingYear,
+      syncQuestions: syncQuestions_,
+      setBusy: setBusy,
+      renderValidation: renderValidation,
+      showImportConfirmation: showImportConfirmation,
+      renderExistingSets: renderExistingSets,
+      showDeleteConfirmation: showDeleteConfirmation,
+      renderResult: renderResult
+    });
+  })();
+
+  /** Parser e validador local dos arquivos selecionados. */
+  var SpreadsheetImportParser = (function () {
+    function normalizeHeader_(value) {
+      return String(value === null || value === undefined ? '' : value)
+        .trim().replace(/\s+/g, ' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+    }
+
+    function isBlank_(value) {
+      return value === null || value === undefined || String(value).trim() === '';
+    }
+
+    function readFileBuffer_(file) {
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function (event) { resolve(event.target.result); };
+        reader.onerror = function () { reject(new Error('Não foi possível ler o arquivo ' + file.name + '.')); };
+        reader.readAsArrayBuffer(file);
+      });
+    }
+
+    async function parseFile(file, schema, headerRow) {
+      if (typeof XLSX === 'undefined') throw new Error('O leitor de planilhas não foi carregado. Atualize a página e tente novamente.');
+      var buffer = await readFileBuffer_(file);
+      var workbook;
+      try {
+        workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
+      } catch (error) {
+        throw new Error('O arquivo ' + file.name + ' não pôde ser interpretado como planilha.');
+      }
+      if (!workbook.SheetNames || !workbook.SheetNames.length) throw new Error('O arquivo ' + file.name + ' não possui planilhas legíveis.');
+
+      var sheetName = workbook.SheetNames.find(function (name) {
+        var candidate = workbook.Sheets[name];
+        return candidate && candidate['!ref'];
+      });
+      if (!sheetName) throw new Error('O arquivo ' + file.name + ' não possui uma planilha com dados.');
+      var worksheet = workbook.Sheets[sheetName];
+      var usedRange = XLSX.utils.decode_range(worksheet['!ref']);
+      var matrix = XLSX.utils.sheet_to_json(worksheet, {
+        header: 1,
+        raw: false,
+        defval: '',
+        blankrows: true,
+        range: { s: { r: 0, c: 0 }, e: usedRange.e }
+      });
+      var headerIndex = Math.max(0, Number(headerRow || 1) - 1);
+      if (headerIndex >= matrix.length) throw new Error('A linha de cabeçalho informada não existe no arquivo ' + file.name + '.');
+
+      var headers = (matrix[headerIndex] || []).map(function (value) { return String(value === null || value === undefined ? '' : value).trim(); });
+      var headerMap = {};
+      var duplicateHeaders = [];
+      headers.forEach(function (header, index) {
+        var key = normalizeHeader_(header);
+        if (!key) return;
+        if (headerMap[key] !== undefined) duplicateHeaders.push(header);
+        else headerMap[key] = index;
+      });
+
+      var canonicalMap = {};
+      schema.sourceHeaders.forEach(function (header) { canonicalMap[normalizeHeader_(header)] = header; });
+      var missing = schema.sourceHeaders.filter(function (header) { return headerMap[normalizeHeader_(header)] === undefined; });
+      var extras = headers.filter(function (header) {
+        var key = normalizeHeader_(header);
+        if (!key || key === 'SEQ' || key === 'SEQ.') return false;
+        return canonicalMap[key] === undefined;
+      });
+
+      var requiredIndex = {};
+      schema.requiredFields.forEach(function (field) { requiredIndex[field] = schema.sourceHeaders.indexOf(field); });
+      var emptyRequired = {};
+      var emptyExamples = {};
+      schema.requiredFields.forEach(function (field) { emptyRequired[field] = 0; emptyExamples[field] = []; });
+
+      var rows = [];
+      for (var r = headerIndex + 1; r < matrix.length; r++) {
+        var source = matrix[r] || [];
+        var hasAny = source.some(function (value) { return !isBlank_(value); });
+        if (!hasAny) continue;
+
+        var canonical = schema.sourceHeaders.map(function (header) {
+          var sourceIndex = headerMap[normalizeHeader_(header)];
+          return sourceIndex === undefined ? '' : source[sourceIndex];
+        });
+        rows.push(canonical);
+
+        schema.requiredFields.forEach(function (field) {
+          if (isBlank_(canonical[requiredIndex[field]])) {
+            emptyRequired[field]++;
+            if (emptyExamples[field].length < 8) emptyExamples[field].push(r + 1);
+          }
+        });
+      }
+
+      var warnings = [];
+      if (missing.length) warnings.push({ level: 'warning', message: file.name + ': colunas esperadas ausentes: ' + missing.join(', ') + '.' });
+      if (duplicateHeaders.length) warnings.push({ level: 'warning', message: file.name + ': cabeçalhos duplicados encontrados: ' + duplicateHeaders.join(', ') + '.' });
+      if (extras.length) warnings.push({ level: 'info', message: file.name + ': ' + extras.length + ' coluna(s) adicional(is) serão ignoradas: ' + extras.slice(0, 8).join(', ') + (extras.length > 8 ? '…' : '') + '.' });
+      schema.requiredFields.forEach(function (field) {
+        if (!emptyRequired[field]) return;
+        warnings.push({
+          level: 'warning',
+          message: file.name + ': ' + emptyRequired[field] + ' registro(s) com ' + field + ' vazio. Exemplos de linhas: ' + emptyExamples[field].join(', ') + '.'
+        });
+      });
+      if (!rows.length) warnings.push({ level: 'warning', message: file.name + ': nenhuma linha de dados foi encontrada abaixo do cabeçalho informado.' });
+
+      return {
+        name: file.name,
+        sheetName: sheetName,
+        rowCount: rows.length,
+        rows: rows,
+        warnings: warnings
+      };
+    }
+
+    async function parseFiles(files, schema, headerRow) {
+      var parsed = [];
+      for (var i = 0; i < files.length; i++) parsed.push(await parseFile(files[i], schema, headerRow));
+      return parsed;
+    }
+
+    return Object.freeze({ parseFiles: parseFiles });
+  })();
+
+  /** Controller do módulo Gerenciar Dados. */
+  var DataImportPanelController = (function () {
+    function init() {
+      var panelElement = document.getElementById('sidePanel');
+      DataImportPanelModel.state.panel = bootstrap.Offcanvas.getOrCreateInstance(panelElement, {
+        backdrop: true, keyboard: true, scroll: false
+      });
+      document.getElementById('menuManageData').addEventListener('click', open);
+      panelElement.addEventListener('hidden.bs.offcanvas', function () {
+        if (DataImportPanelModel.state.jobId) discardJobSilently_();
+      });
+    }
+
+    async function open() {
+      if (!AppModel.state.permissions || !AppModel.state.permissions.canManageData) return;
+      document.getElementById('sidePanelTitle').textContent = 'Gerenciar Dados';
+      document.getElementById('userPanelActions').hidden = true;
+      document.getElementById('prizePanelActions').hidden = true;
+      document.getElementById('parameterPanelActions').hidden = true;
+      document.getElementById('dataPanelActions').hidden = true;
+      document.getElementById('recordPanelActions').hidden = true;
+      DataImportPanelModel.state.panel.show();
+      DataImportPanelModel.reset();
+      UiUtil.setSideStatus(10, 'info', 'Preparando o gerenciamento de dados.');
+      DataImportPanelView.setBusy(true);
+      try {
+        DataImportPanelModel.state.adminContext = await ApiClient.authenticatedCall('getDataImportAdminContext');
+        DataImportPanelView.render();
+        UiUtil.setSideStatus(0, 'info', 'Escolha o que deseja fazer.');
+      } catch (error) {
+        UiUtil.setSideStatus(0, 'error', UiUtil.actionableErrorMessage(error, 'Não foi possível abrir o módulo de dados.'));
+      } finally {
+        DataImportPanelView.setBusy(false);
+      }
+    }
+
+    function discardJobSilently_() {
+      var jobId = DataImportPanelModel.state.jobId;
+      DataImportPanelModel.state.jobId = '';
+      if (!jobId) return;
+      ApiClient.authenticatedCall('cancelDataImport', jobId).catch(function (error) { console.error(error); });
+    }
+
+    function reset() {
+      if (DataImportPanelModel.state.busy) return;
+      discardJobSilently_();
+      DataImportPanelModel.reset();
+      DataImportPanelView.render();
+      UiUtil.setSideStatus(0, 'info', 'Escolha o que deseja fazer.');
+    }
+
+    function resetAfterOperationChange() {
+      var operation = document.getElementById('dataOperation').value;
+      discardJobSilently_();
+      DataImportPanelModel.state.validated = false;
+      DataImportPanelModel.state.validation = null;
+      DataImportPanelModel.state.availableDataSets = [];
+      DataImportPanelModel.state.setYearLoaded = null;
+      DataImportPanelModel.state.selectedDataSetKey = '';
+      document.getElementById('dataType').value = '';
+      document.getElementById('dataYear').value = '';
+      document.getElementById('dataSemester').value = '';
+      document.getElementById('dataExistingYear').value = '';
+      document.getElementById('dataFiles').value = '';
+      document.getElementById('dataFileSelection').textContent = 'Nenhum arquivo selecionado.';
+      document.getElementById('dataValidationStep').hidden = true;
+      document.getElementById('dataExistingSetsStep').hidden = true;
+      UiUtil.setSideStatus(0, 'info', operation ? 'Continue respondendo às próximas etapas.' : 'Escolha o que deseja fazer.');
+    }
+
+    function invalidateValidation() {
+      if (DataImportPanelModel.state.validated || DataImportPanelModel.state.jobId) discardJobSilently_();
+      DataImportPanelModel.state.validated = false;
+      DataImportPanelModel.state.validation = null;
+      var step = document.getElementById('dataValidationStep');
+      if (step) step.hidden = true;
+      var confirm = document.getElementById('dataImportConfirmation');
+      if (confirm) confirm.hidden = true;
+    }
+
+    function resetSetResults() {
+      invalidateValidation();
+      DataImportPanelModel.state.availableDataSets = [];
+      DataImportPanelModel.state.setYearLoaded = null;
+      DataImportPanelModel.state.selectedDataSetKey = '';
+      var step = document.getElementById('dataExistingSetsStep');
+      if (step) step.hidden = true;
+    }
+
+    function validateForm_(values) {
+      if (['NOVO', 'ATUALIZAR'].indexOf(values.operation) < 0) throw new Error('Escolha Novo ou Atualizar para importar arquivos.');
+      if (!values.dataType) throw new Error(values.operation === 'ATUALIZAR' ? 'Selecione o conjunto que deseja atualizar.' : 'Selecione Anual, Semestral ou CENID.');
+      var schema = DataImportPanelModel.schema(values.dataType);
+      if (!schema) throw new Error('Conjunto de dados inválido.');
+      var year = Number(values.year);
+      if (!Number.isInteger(year) || year < 1900 || year > 2200) throw new Error('Informe um ano válido.');
+      if (schema.requiresSemester && ['1', '2'].indexOf(String(values.semester)) < 0) throw new Error('Informe o semestre.');
+      if (!Number.isInteger(values.headerRow) || values.headerRow < 1 || values.headerRow > 1000) throw new Error('Informe uma linha de cabeçalho válida.');
+      if (!values.files.length) throw new Error('Selecione pelo menos um arquivo de planilha.');
+      return schema;
+    }
+
+    function contextPayload_(values) {
+      return {
+        operation: values.operation,
+        dataType: values.dataType,
+        year: Number(values.year),
+        semester: values.semester ? Number(values.semester) : ''
+      };
+    }
+
+    function diagnosisWarning_(diagnosis) {
+      if (!diagnosis) return [];
+      var warnings = [];
+      if (diagnosis.diagnosisType === 'INDETERMINADO') {
+        warnings.push({ level: 'warning', message: 'O sistema não conseguiu determinar se o arquivo representa criação, atualização ou expansão porque não encontrou RAs suficientes para comparação.' });
+      } else if (diagnosis.operationMismatch) {
+        warnings.push({ level: 'warning', message: 'A intenção escolhida (' + diagnosis.selectedOperation + ') não corresponde ao contexto identificado (' + diagnosis.diagnosisLabel + '). A operação recomendada é ' + diagnosis.recommendedOperation + '.' });
+      } else if (diagnosis.diagnosisType === 'EXPANSAO') {
+        warnings.push({ level: 'info', message: 'Nenhum RA do arquivo existe no conjunto selecionado. A atualização funcionará como expansão e acrescentará os novos registros sem remover linhas existentes.' });
+      } else if (diagnosis.diagnosisType === 'ATUALIZACAO_EXPANSAO') {
+        warnings.push({ level: 'info', message: 'O arquivo contém dados já existentes e também novos registros. A atualização combinará alteração e expansão do conjunto.' });
+      }
+      return warnings;
+    }
+
+    async function validate() {
+      if (DataImportPanelModel.state.busy) return;
+      var values = DataImportPanelView.formValues();
+      var schema;
+      try { schema = validateForm_(values); } catch (error) {
+        UiUtil.setSideStatus(0, 'warning', error.message);
+        return;
+      }
+
+      discardJobSilently_();
+      DataImportPanelView.setBusy(true);
+      UiUtil.setSideStatus(12, 'info', 'Lendo e validando os arquivos selecionados.');
+      try {
+        var parsedFiles = await SpreadsheetImportParser.parseFiles(values.files, schema, values.headerRow);
+        var warnings = [];
+        var allRows = [];
+        parsedFiles.forEach(function (file) {
+          allRows = allRows.concat(file.rows);
+          warnings = warnings.concat(file.warnings);
+        });
+
+        UiUtil.setSideStatus(32, 'info', 'Preparando a comparação com a base.');
+        var started = await ApiClient.authenticatedCall('beginDataImport', contextPayload_(values));
+        DataImportPanelModel.state.jobId = started.jobId || '';
+        var maxChunkRows = Math.max(100, Number(started.maxChunkRows || (DataImportPanelModel.state.adminContext && DataImportPanelModel.state.adminContext.maxChunkRows) || 1000));
+        var chunks = Math.max(1, Math.ceil(allRows.length / maxChunkRows));
+
+        for (var offset = 0, part = 0; offset < allRows.length; offset += maxChunkRows, part++) {
+          var chunk = allRows.slice(offset, offset + maxChunkRows);
+          var percent = 35 + Math.round(((part + 1) / chunks) * 35);
+          UiUtil.setSideStatus(percent, 'info', 'Preparando bloco ' + (part + 1) + ' de ' + chunks + ' para comparação.');
+          await ApiClient.authenticatedCall('appendDataImportChunk', DataImportPanelModel.state.jobId, chunk);
+        }
+
+        UiUtil.setSideStatus(78, 'info', 'Comparando RAs e registros com o conjunto existente.');
+        var diagnosis = await ApiClient.authenticatedCall('previewDataImport', DataImportPanelModel.state.jobId);
+        warnings = warnings.concat(diagnosisWarning_(diagnosis));
+
+        var validation = {
+          values: values,
+          diagnosis: diagnosis,
+          files: parsedFiles.map(function (file) { return { name: file.name, sheetName: file.sheetName, rowCount: file.rowCount, warningCount: file.warnings.length }; }),
+          warnings: warnings,
+          totalRows: allRows.length
+        };
+
+        DataImportPanelModel.state.validation = validation;
+        DataImportPanelModel.state.validated = true;
+        DataImportPanelView.renderValidation(validation);
+        UiUtil.setSideStatus(100, warnings.length ? 'warning' : 'success', warnings.length ? 'Diagnóstico concluído com ' + warnings.length + ' observação(ões).' : 'Diagnóstico concluído sem inconsistências.');
+      } catch (error) {
+        discardJobSilently_();
+        DataImportPanelModel.state.validated = false;
+        DataImportPanelModel.state.validation = null;
+        UiUtil.setSideStatus(0, 'error', UiUtil.actionableErrorMessage(error, 'Não foi possível validar e comparar os arquivos.'));
+      } finally {
+        DataImportPanelView.setBusy(false);
+      }
+    }
+
+    function requestImportExecution() {
+      var state = DataImportPanelModel.state;
+      if (state.busy || !state.validated || !state.validation || !state.jobId) return;
+      DataImportPanelView.showImportConfirmation(state.validation);
+    }
+
+    async function executeImport(executionOperation) {
+      var state = DataImportPanelModel.state;
+      if (state.busy || !state.validated || !state.validation || !state.jobId) return;
+      DataImportPanelView.setBusy(true);
+      try {
+        UiUtil.setSideStatus(70, 'info', executionOperation === 'ATUALIZAR' ? 'Aplicando atualização inteligente sem remover linhas.' : 'Gravando o novo conjunto conforme sua decisão.');
+        var result = await ApiClient.authenticatedCall('commitDataImport', state.jobId, executionOperation || state.validation.values.operation);
+        state.jobId = '';
+        state.validated = false;
+        DataImportPanelView.renderResult(result);
+        UiUtil.setSideStatus(90, 'info', 'Dados gravados. Atualizando a mesa de apuração…');
+        var refreshed = await ApurationWorkspaceController.refreshAfterDataChange();
+        UiUtil.setSideStatus(100, refreshed ? 'success' : 'warning', refreshed ? 'Operação concluída. Mesa de apuração atualizada.' : 'Dados gravados. Consulte o aviso de atualização na mesa de apuração.');
+      } catch (error) {
+        discardJobSilently_();
+        UiUtil.setSideStatus(0, 'error', UiUtil.actionableErrorMessage(error, 'Não foi possível concluir a operação.'));
+      } finally {
+        DataImportPanelView.setBusy(false);
+      }
+    }
+
+    async function loadExistingSets() {
+      if (DataImportPanelModel.state.busy) return;
+      var year = Number(DataImportPanelView.existingYear());
+      var operation = String(document.getElementById('dataOperation').value || '');
+      if (['ATUALIZAR', 'EXCLUIR'].indexOf(operation) < 0) return;
+      if (!Number.isInteger(year) || year < 1900 || year > 2200) {
+        UiUtil.setSideStatus(0, 'warning', 'Informe um ano válido.');
+        return;
+      }
+
+      DataImportPanelView.setBusy(true);
+      UiUtil.setSideStatus(30, 'info', 'Localizando os conjuntos existentes em ' + year + '.');
+      try {
+        var context = await ApiClient.authenticatedCall('getDataImportAdminContext', year);
+        var items = context && Array.isArray(context.availableDataSets) ? context.availableDataSets : [];
+        DataImportPanelModel.state.availableDataSets = items;
+        DataImportPanelModel.state.setYearLoaded = year;
+        DataImportPanelModel.state.selectedDataSetKey = '';
+        DataImportPanelView.renderExistingSets(year, items || [], operation);
+        DataImportPanelView.syncQuestions();
+        UiUtil.setSideStatus(100, 'success', items.length ? items.length + ' conjunto(s) disponível(is) em ' + year + '.' : 'Nenhum conjunto encontrado em ' + year + '.');
+      } catch (error) {
+        UiUtil.setSideStatus(0, 'error', UiUtil.actionableErrorMessage(error, 'Não foi possível localizar os conjuntos.'));
+      } finally {
+        DataImportPanelView.setBusy(false);
+      }
+    }
+
+    function selectExistingSet(key) {
+      invalidateValidation();
+      DataImportPanelModel.state.selectedDataSetKey = key || '';
+    }
+
+    function requestDeleteExecution() {
+      var item = DataImportPanelModel.selectedDataSet();
+      if (!item) {
+        UiUtil.setSideStatus(0, 'warning', 'Selecione um conjunto para excluir.');
+        return;
+      }
+      DataImportPanelView.showDeleteConfirmation(item);
+    }
+
+    async function executeDelete() {
+      if (DataImportPanelModel.state.busy) return;
+      var item = DataImportPanelModel.selectedDataSet();
+      if (!item) return;
+
+      DataImportPanelView.setBusy(true);
+      UiUtil.setSideStatus(35, 'info', 'Excluindo ' + item.label + '.');
+      try {
+        var result = await ApiClient.authenticatedCall('deleteAcademicDataSet', {
+          operation: 'EXCLUIR',
+          dataType: item.dataType,
+          year: item.year,
+          semester: item.semester || ''
+        });
+        UiUtil.setSideStatus(100, 'success', Number(result.deletedRows || 0) + ' linha(s) excluída(s).');
+        DataImportPanelModel.state.availableDataSets = (DataImportPanelModel.state.availableDataSets || []).filter(function (candidate) { return candidate.key !== item.key; });
+        DataImportPanelModel.state.selectedDataSetKey = '';
+        DataImportPanelView.renderExistingSets(item.year, DataImportPanelModel.state.availableDataSets, 'EXCLUIR');
+        DataImportPanelView.syncQuestions();
+        var refreshed = await ApurationWorkspaceController.refreshAfterDataChange();
+        if (!refreshed) UiUtil.setSideStatus(100, 'warning', 'Conjunto excluído. Consulte o aviso de atualização na mesa de apuração.');
+      } catch (error) {
+        UiUtil.setSideStatus(0, 'error', UiUtil.actionableErrorMessage(error, 'Não foi possível excluir o conjunto.'));
+      } finally {
+        DataImportPanelView.setBusy(false);
+      }
+    }
+
+    return Object.freeze({
+      init: init,
+      open: open,
+      reset: reset,
+      resetAfterOperationChange: resetAfterOperationChange,
+      invalidateValidation: invalidateValidation,
+      resetSetResults: resetSetResults,
+      validate: validate,
+      requestImportExecution: requestImportExecution,
+      executeImport: executeImport,
+      loadExistingSets: loadExistingSets,
+      selectExistingSet: selectExistingSet,
+      requestDeleteExecution: requestDeleteExecution,
+      executeDelete: executeDelete
+    });
+  })();
+</script>

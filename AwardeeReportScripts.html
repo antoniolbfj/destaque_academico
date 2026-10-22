@@ -1,0 +1,389 @@
+<script>
+  var AwardeeReportWorkspaceController = (function () {
+    var PERSONAL_MODELS_KEY = 'topplus_awardee_report_models_v1';
+    var state = { workspace: null, loading: false, selectedKeys: [], filters: [], personalModels: [] };
+    var operators = [
+      ['=', 'Igual a'], ['!=', 'Diferente de'], ['contains', 'Contém'], ['notcontains', 'Não contém'],
+      ['starts', 'Começa com'], ['>=', 'Maior ou igual'], ['<=', 'Menor ou igual'], ['empty', 'Está vazio'], ['notempty', 'Não está vazio']
+    ];
+
+    function init() {
+      document.getElementById('menuAwardeeReports').addEventListener('click', open);
+      document.getElementById('repNew').addEventListener('click', newReport_);
+      document.getElementById('repMyModels').addEventListener('click', openMyModels_);
+      document.getElementById('repSaveModel').addEventListener('click', savePersonalModel_);
+      document.getElementById('repGenerate').addEventListener('click', renderPreview_);
+      document.getElementById('repDuplicate').addEventListener('click', duplicate_);
+      document.getElementById('repApplyModel').addEventListener('click', applySelectedModel_);
+      document.getElementById('repSelectAll').addEventListener('click', selectAll_);
+      document.getElementById('repSelectNone').addEventListener('click', selectNone_);
+      document.getElementById('repAddFilter').addEventListener('click', addFilter_);
+      document.getElementById('repClearConfig').addEventListener('click', clearConfig_);
+      document.getElementById('repExportCsv').addEventListener('click', exportCsv_);
+      document.getElementById('repExportXlsx').addEventListener('click', exportXlsx_);
+      document.getElementById('repPrint').addEventListener('click', print_);
+      document.getElementById('repEmit').addEventListener('click', print_);
+      document.getElementById('repName').addEventListener('input', renderPreview_);
+      document.getElementById('repPageSize').addEventListener('change', renderPreview_);
+      ['repGroup1','repGroup2','repSort1','repSort2','repDir1','repDir2','repShowGroupRows','repRawHeaders','repRepeatHeader','repShowTitle'].forEach(function (id) {
+        document.getElementById(id).addEventListener('change', renderPreview_);
+      });
+      document.querySelectorAll('[data-rep-tab]').forEach(function (button) {
+        button.addEventListener('click', function () { setTab_(button.dataset.repTab); });
+      });
+      window.addEventListener('beforeprint', buildPrintReport_);
+    }
+
+    function showWorkspace_() {
+      document.getElementById('mainContent').hidden = true;
+      document.getElementById('awardeeWorkspace').hidden = true;
+      document.getElementById('manualAwardeeWorkspace').hidden = true;
+      document.getElementById('publicPortalConfigWorkspace').hidden = true;
+      document.getElementById('awardeeReportWorkspace').hidden = false;
+      document.querySelectorAll('.sidebar-item').forEach(function (button) { button.classList.toggle('is-active', button.id === 'menuAwardeeReports'); });
+      document.getElementById('activeSectionTitle').textContent = 'Relatórios de premiados';
+      bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('sidePanel')).hide();
+    }
+
+    async function open() {
+      if (!AppModel.state.permissions || !AppModel.state.permissions.canManageRecords) return;
+      showWorkspace_();
+      await load_();
+    }
+
+    async function load_() {
+      if (state.loading) return;
+      var previousConfig = state.workspace ? configSnapshot_() : null;
+      state.loading = true;
+      document.getElementById('repPreviewArea').innerHTML = '<div class="preview-empty"><div><span class="spinner-border spinner-border-sm me-2"></span>Carregando o espelho dos premiados…</div></div>';
+      try {
+        state.workspace = await ApiClient.authenticatedCall('getAwardeeReportWorkspace');
+        state.personalModels = loadPersonalModels_();
+        renderFieldOptions_();
+        renderFieldSelects_();
+        renderModelOptions_();
+        if (previousConfig) applyModel_({ name: previousConfig.reportName, config: previousConfig });
+        else {
+          var defaultModel = standardModels_()[0];
+          if (defaultModel) applyModel_(defaultModel);
+          else newReport_();
+        }
+      } catch (error) {
+        document.getElementById('repPreviewArea').innerHTML = '<div class="preview-empty"><div><strong>Falha ao carregar os dados.</strong><br>' + UiUtil.escapeHtml(UiUtil.actionableErrorMessage(error, 'Não foi possível carregar os relatórios.')) + '</div></div>';
+      } finally { state.loading = false; }
+    }
+
+    function fields_() { return state.workspace && state.workspace.fields || []; }
+    function records_() { return state.workspace && state.workspace.records || []; }
+    function standardModels_() { return state.workspace && state.workspace.models || []; }
+    function fieldMap_() { var map = {}; fields_().forEach(function (f) { map[f.key] = f; }); return map; }
+    function esc_(value) { return UiUtil.escapeHtml(value === null || value === undefined ? '' : String(value)); }
+
+    function renderFieldOptions_() {
+      var host = document.getElementById('repFieldOptions');
+      var groups = ['Estudante','Premiação','Contexto acadêmico','Desempenho','Auditoria','Técnico'];
+      var html = '';
+      groups.forEach(function (group) {
+        var list = fields_().filter(function (field) { return field.group === group; });
+        if (!list.length) return;
+        html += '<div class="field-group-title">' + esc_(group) + '</div>';
+        list.forEach(function (field) {
+          html += '<label class="field-option"><input type="checkbox" class="rep-field-checkbox" data-key="' + UiUtil.escapeAttr(field.key) + '"><span>' + esc_(field.label) + '<small>' + esc_(field.db) + '</small></span></label>';
+        });
+      });
+      host.innerHTML = html;
+      host.querySelectorAll('.rep-field-checkbox').forEach(function (checkbox) {
+        checkbox.addEventListener('change', function () {
+          var key = checkbox.dataset.key;
+          if (checkbox.checked && state.selectedKeys.indexOf(key) < 0) state.selectedKeys.push(key);
+          if (!checkbox.checked) state.selectedKeys = state.selectedKeys.filter(function (item) { return item !== key; });
+          renderSelectedFields_(); renderPreview_();
+        });
+      });
+    }
+
+    function renderFieldSelects_() {
+      var options = '<option value="">Nenhum</option>' + fields_().map(function (f) { return '<option value="' + UiUtil.escapeAttr(f.key) + '">' + esc_(f.label) + '</option>'; }).join('');
+      ['repGroup1','repGroup2','repSort1','repSort2'].forEach(function (id) { document.getElementById(id).innerHTML = options; });
+    }
+
+    function renderSelectedFields_() {
+      var map = fieldMap_();
+      var host = document.getElementById('repSelectedFields');
+      host.innerHTML = state.selectedKeys.map(function (key) {
+        var f = map[key]; if (!f) return '';
+        return '<div class="selected-field"><span class="drag">≡</span><div><strong>' + esc_(f.label) + '</strong><small>' + esc_(f.db) + '</small></div><div class="order-buttons"><button type="button" data-rep-move="-1" data-key="' + UiUtil.escapeAttr(key) + '" title="Mover para cima">↑</button><button type="button" data-rep-move="1" data-key="' + UiUtil.escapeAttr(key) + '" title="Mover para baixo">↓</button></div></div>';
+      }).join('');
+      host.querySelectorAll('[data-rep-move]').forEach(function (button) {
+        button.addEventListener('click', function () {
+          var key = button.dataset.key, delta = Number(button.dataset.repMove), index = state.selectedKeys.indexOf(key), next = index + delta;
+          if (index < 0 || next < 0 || next >= state.selectedKeys.length) return;
+          var temp = state.selectedKeys[index]; state.selectedKeys[index] = state.selectedKeys[next]; state.selectedKeys[next] = temp;
+          renderSelectedFields_(); renderPreview_();
+        });
+      });
+      syncFieldChecks_();
+    }
+
+    function syncFieldChecks_() {
+      document.querySelectorAll('.rep-field-checkbox').forEach(function (checkbox) { checkbox.checked = state.selectedKeys.indexOf(checkbox.dataset.key) >= 0; });
+    }
+
+    function renderFilters_() {
+      var host = document.getElementById('repFilterList');
+      var html = '';
+      state.filters.forEach(function (filter, index) {
+        if (index > 0) html += '<div class="logic-line"><span class="logic-chip">E</span></div>';
+        html += '<div class="filter-card"><div class="filter-card-top"><span class="filter-index">Condição ' + (index + 1) + '</span><button type="button" class="remove-filter" data-rep-remove="' + index + '">×</button></div><div class="filter-grid"><select class="report-control rep-filter-field" data-index="' + index + '">' + fields_().map(function (f) { return '<option value="' + UiUtil.escapeAttr(f.key) + '" ' + (f.key === filter.field ? 'selected' : '') + '>' + esc_(f.label) + '</option>'; }).join('') + '</select><select class="report-control rep-filter-op" data-index="' + index + '">' + operators.map(function (op) { return '<option value="' + UiUtil.escapeAttr(op[0]) + '" ' + (op[0] === filter.operator ? 'selected' : '') + '>' + esc_(op[1]) + '</option>'; }).join('') + '</select></div><div class="filter-grid"><input class="report-control full rep-filter-value" data-index="' + index + '" value="' + UiUtil.escapeAttr(filter.value || '') + '" placeholder="Valor do filtro" ' + ((filter.operator === 'empty' || filter.operator === 'notempty') ? 'disabled' : '') + '></div></div>';
+      });
+      host.innerHTML = html;
+      host.querySelectorAll('.rep-filter-field').forEach(function (el) { el.addEventListener('change', function () { state.filters[Number(el.dataset.index)].field = el.value; renderPreview_(); }); });
+      host.querySelectorAll('.rep-filter-op').forEach(function (el) { el.addEventListener('change', function () { state.filters[Number(el.dataset.index)].operator = el.value; renderFilters_(); renderPreview_(); }); });
+      host.querySelectorAll('.rep-filter-value').forEach(function (el) { el.addEventListener('input', function () { state.filters[Number(el.dataset.index)].value = el.value; renderPreview_(); }); });
+      host.querySelectorAll('[data-rep-remove]').forEach(function (el) { el.addEventListener('click', function () { state.filters.splice(Number(el.dataset.repRemove), 1); renderFilters_(); renderPreview_(); }); });
+    }
+
+    function currentLabel_(key) {
+      var field = fieldMap_()[key];
+      if (!field) return key;
+      return document.getElementById('repRawHeaders').checked ? field.db : field.label;
+    }
+
+    function displayValue_(key, value) {
+      if (value === null || value === undefined || value === '') return '—';
+      var field = fieldMap_()[key] || {};
+      if (field.type === 'number' && Number.isFinite(Number(value))) return Number(value).toLocaleString('pt-BR', { minimumFractionDigits: key === 'ano' || key === 'posicao' ? 0 : 2, maximumFractionDigits: 2 });
+      if (field.type === 'date') {
+        var d = new Date(value);
+        if (!isNaN(d.getTime())) return d.toLocaleString('pt-BR');
+      }
+      return String(value);
+    }
+
+    function compareFilter_(row, filter) {
+      var value = row[filter.field], raw = filter.value;
+      if (filter.operator === 'empty') return value === null || value === undefined || String(value).trim() === '';
+      if (filter.operator === 'notempty') return !(value === null || value === undefined || String(value).trim() === '');
+      var a = String(value === null || value === undefined ? '' : value).toLocaleLowerCase('pt-BR');
+      var b = String(raw === null || raw === undefined ? '' : raw).toLocaleLowerCase('pt-BR');
+      if (filter.operator === '=') return a === b;
+      if (filter.operator === '!=') return a !== b;
+      if (filter.operator === 'contains') return a.indexOf(b) >= 0;
+      if (filter.operator === 'notcontains') return a.indexOf(b) < 0;
+      if (filter.operator === 'starts') return a.indexOf(b) === 0;
+      if (filter.operator === '>=') return Number(value) >= Number(raw);
+      if (filter.operator === '<=') return Number(value) <= Number(raw);
+      return true;
+    }
+
+    function filteredData_() {
+      var data = records_().filter(function (row) { return state.filters.every(function (filter) { return compareFilter_(row, filter); }); });
+      var sorters = [
+        [document.getElementById('repSort1').value, document.getElementById('repDir1').value],
+        [document.getElementById('repSort2').value, document.getElementById('repDir2').value]
+      ].filter(function (item) { return item[0]; });
+      return data.slice().sort(function (a, b) {
+        for (var i = 0; i < sorters.length; i++) {
+          var key = sorters[i][0], dir = sorters[i][1], av = a[key], bv = b[key], cmp = 0;
+          if (Number.isFinite(Number(av)) && av !== '' && Number.isFinite(Number(bv)) && bv !== '') cmp = Number(av) - Number(bv);
+          else cmp = String(av === null || av === undefined ? '' : av).localeCompare(String(bv === null || bv === undefined ? '' : bv), 'pt-BR', { numeric: true, sensitivity: 'base' });
+          if (cmp) return dir === 'desc' ? -cmp : cmp;
+        }
+        return 0;
+      });
+    }
+
+    function groupSignature_(row) {
+      var keys = [document.getElementById('repGroup1').value, document.getElementById('repGroup2').value].filter(Boolean);
+      return keys.map(function (key) { return displayValue_(key, row[key]); }).filter(Boolean).join(' › ');
+    }
+
+    function renderPreview_() {
+      if (!state.workspace) return;
+      var data = filteredData_(), map = fieldMap_(), pageSize = Number(document.getElementById('repPageSize').value || 20);
+      document.getElementById('repPreviewTitle').textContent = document.getElementById('repName').value || 'Relatório sem título';
+      document.getElementById('repKpiRecords').textContent = data.length;
+      document.getElementById('repKpiColumns').textContent = state.selectedKeys.length;
+      document.getElementById('repKpiFilters').textContent = state.filters.length;
+      var groups = [document.getElementById('repGroup1').value, document.getElementById('repGroup2').value].filter(Boolean);
+      document.getElementById('repKpiGroups').textContent = groups.length ? groups.map(function (key) { return map[key] ? map[key].label : key; }).join(' + ') : 'Nenhum';
+      document.getElementById('repRawBadge').hidden = !document.getElementById('repRawHeaders').checked;
+      document.getElementById('repBuilderSummary').innerHTML = '<strong>' + state.selectedKeys.length + '</strong> campos · <strong>' + state.filters.length + '</strong> filtros · <strong>' + data.length + '</strong> registros';
+      document.getElementById('repPreviewSubtitle').textContent = state.filters.length ? state.filters.length + ' filtro(s) aplicado(s) · ordenação dinâmica' : 'Sem filtros · todos os registros';
+      if (!state.selectedKeys.length) {
+        document.getElementById('repPreviewArea').innerHTML = '<div class="preview-empty"><div><strong>Nenhuma coluna selecionada.</strong><br>Escolha pelo menos um campo para compor o relatório.</div></div>';
+        return;
+      }
+      var visible = data.slice(0, pageSize), html = '<table class="preview-table"><thead><tr>' + state.selectedKeys.map(function (key) { return '<th>' + esc_(currentLabel_(key)) + '</th>'; }).join('') + '</tr></thead><tbody>', lastGroup = null;
+      visible.forEach(function (row) {
+        var sig = groupSignature_(row);
+        if (document.getElementById('repShowGroupRows').checked && sig && sig !== lastGroup) { html += '<tr class="group-row"><td colspan="' + state.selectedKeys.length + '">' + esc_(sig) + '</td></tr>'; lastGroup = sig; }
+        html += '<tr>' + state.selectedKeys.map(function (key) { return '<td class="' + (document.getElementById('repRawHeaders').checked ? 'technical' : '') + '">' + esc_(displayValue_(key, row[key])) + '</td>'; }).join('') + '</tr>';
+      });
+      html += '</tbody></table>';
+      if (!visible.length) html = '<div class="preview-empty"><div><strong>Nenhum registro encontrado.</strong><br>Revise os filtros da configuração.</div></div>';
+      document.getElementById('repPreviewArea').innerHTML = html;
+      document.getElementById('repPreviewFooterText').textContent = 'Prévia de ' + Math.min(visible.length, data.length) + ' de ' + data.length + ' registro(s) · fonte: PREMIADOS + categoria em PRÊMIOS';
+    }
+
+    function setTab_(name) {
+      document.querySelectorAll('[data-rep-tab]').forEach(function (button) { button.classList.toggle('is-active', button.dataset.repTab === name); });
+      document.getElementById('repPanelFields').classList.toggle('is-active', name === 'fields');
+      document.getElementById('repPanelFilters').classList.toggle('is-active', name === 'filters');
+      document.getElementById('repPanelOrganize').classList.toggle('is-active', name === 'organize');
+    }
+
+    function applyModel_(model) {
+      if (!model || !model.config) return;
+      var config = model.config;
+      state.selectedKeys = (config.fields || []).slice();
+      state.filters = (config.filters || []).map(function (item) { return { field: item.field, operator: item.operator, value: item.value }; });
+      document.getElementById('repName').value = config.reportName || model.name || 'Relatório de premiados';
+      document.getElementById('repGroup1').value = config.group1 || '';
+      document.getElementById('repGroup2').value = config.group2 || '';
+      document.getElementById('repSort1').value = config.sort1 || '';
+      document.getElementById('repDir1').value = config.dir1 || 'asc';
+      document.getElementById('repSort2').value = config.sort2 || '';
+      document.getElementById('repDir2').value = config.dir2 || 'asc';
+      document.getElementById('repRawHeaders').checked = Boolean(config.raw);
+      document.getElementById('repShowGroupRows').checked = config.showGroupRows !== false;
+      document.getElementById('repShowTitle').checked = config.showTitle !== false;
+      document.getElementById('repRepeatHeader').checked = config.repeatHeader !== false;
+      renderSelectedFields_(); renderFilters_(); renderPreview_();
+    }
+
+    function renderModelOptions_() {
+      var select = document.getElementById('repModelSelect');
+      var standard = standardModels_(), personal = state.personalModels || [];
+      var html = '<optgroup label="Modelos padrão">' + standard.map(function (model) { return '<option value="std:' + UiUtil.escapeAttr(model.id) + '">' + esc_(model.name) + '</option>'; }).join('') + '</optgroup>';
+      if (personal.length) html += '<optgroup label="Meus modelos">' + personal.map(function (model) { return '<option value="usr:' + UiUtil.escapeAttr(model.id) + '">' + esc_(model.name) + '</option>'; }).join('') + '</optgroup>';
+      select.innerHTML = html;
+    }
+
+    function selectedModel_() {
+      var value = document.getElementById('repModelSelect').value || '';
+      if (value.indexOf('std:') === 0) return standardModels_().find(function (model) { return model.id === value.slice(4); }) || null;
+      if (value.indexOf('usr:') === 0) return state.personalModels.find(function (model) { return model.id === value.slice(4); }) || null;
+      return null;
+    }
+
+    function applySelectedModel_() { var model = selectedModel_(); if (model) { applyModel_(model); showToast_('Modelo aplicado.'); } }
+
+    function configSnapshot_() {
+      return {
+        reportName: document.getElementById('repName').value || 'Relatório de premiados', fields: state.selectedKeys.slice(),
+        filters: state.filters.map(function (item) { return { field: item.field, operator: item.operator, value: item.value }; }),
+        group1: document.getElementById('repGroup1').value, group2: document.getElementById('repGroup2').value,
+        showGroupRows: document.getElementById('repShowGroupRows').checked,
+        sort1: document.getElementById('repSort1').value, dir1: document.getElementById('repDir1').value,
+        sort2: document.getElementById('repSort2').value, dir2: document.getElementById('repDir2').value,
+        raw: document.getElementById('repRawHeaders').checked,
+        repeatHeader: document.getElementById('repRepeatHeader').checked, showTitle: document.getElementById('repShowTitle').checked
+      };
+    }
+
+    function loadPersonalModels_() {
+      try { var value = JSON.parse(localStorage.getItem(PERSONAL_MODELS_KEY) || '[]'); return Array.isArray(value) ? value : []; }
+      catch (error) { return []; }
+    }
+
+    function savePersonalModel_() {
+      var name = String(document.getElementById('repName').value || '').trim();
+      if (!name) { showToast_('Informe um nome para o relatório antes de salvar o modelo.'); return; }
+      var normalized = name.toLocaleLowerCase('pt-BR'), models = loadPersonalModels_(), existing = models.find(function (model) { return String(model.name || '').toLocaleLowerCase('pt-BR') === normalized; });
+      var model = { id: existing ? existing.id : ('modelo_' + Date.now()), name: name, description: 'Modelo pessoal', standard: false, config: configSnapshot_() };
+      models = models.filter(function (item) { return item.id !== model.id; }); models.push(model);
+      try { localStorage.setItem(PERSONAL_MODELS_KEY, JSON.stringify(models)); state.personalModels = models; renderModelOptions_(); document.getElementById('repModelSelect').value = 'usr:' + model.id; showToast_(existing ? 'Modelo pessoal atualizado.' : 'Modelo pessoal salvo neste navegador.'); }
+      catch (error) { showToast_('Não foi possível salvar o modelo neste navegador.'); }
+    }
+
+    function openMyModels_() {
+      state.personalModels = loadPersonalModels_(); renderModelOptions_();
+      if (!state.personalModels.length) { showToast_('Nenhum modelo pessoal salvo ainda.'); return; }
+      document.getElementById('repModelSelect').value = 'usr:' + state.personalModels[0].id; applySelectedModel_();
+    }
+
+    function newReport_() {
+      state.selectedKeys = ['nome','ra','curso','premio','categoria','regime','ano','situacao']; state.filters = [];
+      document.getElementById('repName').value = 'Novo relatório de premiados';
+      ['repGroup1','repGroup2','repSort1','repSort2'].forEach(function (id) { document.getElementById(id).value = ''; });
+      document.getElementById('repSort1').value = 'ano'; document.getElementById('repDir1').value = 'desc';
+      document.getElementById('repSort2').value = 'nome'; document.getElementById('repDir2').value = 'asc';
+      document.getElementById('repRawHeaders').checked = false; document.getElementById('repShowGroupRows').checked = true;
+      renderSelectedFields_(); renderFilters_(); renderPreview_(); showToast_('Nova configuração iniciada.');
+    }
+
+    function duplicate_() { document.getElementById('repName').value = (document.getElementById('repName').value || 'Relatório') + ' — cópia'; renderPreview_(); showToast_('Configuração duplicada para edição.'); }
+    function selectAll_() { state.selectedKeys = fields_().map(function (field) { return field.key; }); renderSelectedFields_(); renderPreview_(); }
+    function selectNone_() { state.selectedKeys = []; renderSelectedFields_(); renderPreview_(); }
+    function addFilter_() { var first = fields_()[0]; state.filters.push({ field: first ? first.key : 'nome', operator: 'contains', value: '' }); renderFilters_(); renderPreview_(); }
+    function clearConfig_() { state.selectedKeys = []; state.filters = []; document.getElementById('repGroup1').value = ''; document.getElementById('repGroup2').value = ''; document.getElementById('repSort1').value = ''; document.getElementById('repSort2').value = ''; renderSelectedFields_(); renderFilters_(); renderPreview_(); }
+
+    function filterDescription_(filter) {
+      var field = fieldMap_()[filter.field], op = operators.find(function (item) { return item[0] === filter.operator; });
+      var label = field ? field.label : filter.field, opLabel = op ? op[1] : filter.operator;
+      if (filter.operator === 'empty' || filter.operator === 'notempty') return label + ' — ' + opLabel;
+      return label + ' — ' + opLabel + ' — ' + (filter.value || '""');
+    }
+
+    function exportRows_(formatted) {
+      var data = filteredData_(), rows = [state.selectedKeys.map(currentLabel_)], map = fieldMap_();
+      data.forEach(function (record) {
+        rows.push(state.selectedKeys.map(function (key) {
+          if (formatted !== false) return displayValue_(key, record[key]);
+          var field = map[key] || {}, value = record[key];
+          if (value === null || value === undefined || value === '') return '';
+          if (field.type === 'number' && Number.isFinite(Number(value))) return Number(value);
+          return value;
+        }));
+      });
+      return rows;
+    }
+
+    function safeFilename_() { return String(document.getElementById('repName').value || 'relatorio_premiados').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9-_]+/gi, '_').replace(/^_+|_+$/g, '') || 'relatorio_premiados'; }
+
+    function exportCsv_() {
+      if (!state.selectedKeys.length) { showToast_('Selecione pelo menos uma coluna.'); return; }
+      var csv = exportRows_(true).map(function (row) { return row.map(function (value) { return '"' + String(value === null || value === undefined ? '' : value).replace(/"/g, '""') + '"'; }).join(';'); }).join('\n');
+      var blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' }), url = URL.createObjectURL(blob), link = document.createElement('a');
+      link.href = url; link.download = safeFilename_() + '.csv'; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+    }
+
+    function exportXlsx_() {
+      if (!state.selectedKeys.length) { showToast_('Selecione pelo menos uma coluna.'); return; }
+      if (typeof XLSX === 'undefined') { showToast_('A biblioteca de planilhas não foi carregada.'); return; }
+      var ws = XLSX.utils.aoa_to_sheet(exportRows_(false)), wb = XLSX.utils.book_new(); ws['!cols'] = state.selectedKeys.map(function (key) { var label = currentLabel_(key); return { wch: Math.max(12, Math.min(42, String(label || '').length + 4)) }; }); XLSX.utils.book_append_sheet(wb, ws, 'Premiados'); XLSX.writeFile(wb, safeFilename_() + '.xlsx');
+    }
+
+    function buildPrintReport_() {
+      if (!state.workspace || !state.selectedKeys.length) return;
+      var data = filteredData_(), map = fieldMap_(), raw = document.getElementById('repRawHeaders').checked;
+      var groups = [document.getElementById('repGroup1').value, document.getElementById('repGroup2').value].filter(Boolean);
+      var filterText = state.filters.length ? state.filters.map(filterDescription_).join('  •  ') : 'Nenhum filtro aplicado';
+      var table = '<table class="report-print-table"><thead><tr>' + state.selectedKeys.map(function (key) { return '<th>' + esc_(currentLabel_(key)) + '</th>'; }).join('') + '</tr></thead><tbody>', lastGroup = null;
+      data.forEach(function (row) {
+        var sig = groupSignature_(row);
+        if (document.getElementById('repShowGroupRows').checked && sig && sig !== lastGroup) { table += '<tr class="group-row"><td colspan="' + state.selectedKeys.length + '">' + esc_(sig) + '</td></tr>'; lastGroup = sig; }
+        table += '<tr>' + state.selectedKeys.map(function (key) { return '<td class="' + (raw ? 'technical' : '') + '">' + esc_(displayValue_(key, row[key])) + '</td>'; }).join('') + '</tr>';
+      });
+      if (!data.length) table += '<tr><td colspan="' + Math.max(1, state.selectedKeys.length) + '">Nenhum registro encontrado para os filtros atuais.</td></tr>';
+      table += '</tbody></table>';
+      var printSheet = document.getElementById('awardeeReportPrintSheet'), showTitle = document.getElementById('repShowTitle').checked;
+      printSheet.classList.toggle('report-no-repeat', !document.getElementById('repRepeatHeader').checked);
+      printSheet.innerHTML = '<header class="report-print-header"><div class="report-print-brand">IFTM — Campus Uberlândia · Destaque Acadêmico</div>' + (showTitle ? '<h1 class="report-print-title">' + esc_(document.getElementById('repName').value || 'Relatório de premiados') + '</h1>' : '') + '<div class="report-print-meta">Relatório gerado em ' + esc_(new Date().toLocaleString('pt-BR')) + (raw ? ' · Modo espelho da base' : '') + '</div>' + (showTitle ? '<div class="report-print-filter-summary"><strong>Filtros:</strong> ' + esc_(filterText) + '</div>' : '') + '<div class="report-print-stats"><span><strong>' + data.length + '</strong> registro(s)</span><span><strong>' + state.selectedKeys.length + '</strong> coluna(s)</span><span><strong>' + (groups.length ? groups.map(function (key) { return map[key] ? map[key].label : key; }).join(' + ') : 'Sem agrupamento') + '</strong></span></div></header>' + table + '<footer class="report-print-footer">Fonte: registros armazenados em PREMIADOS e categoria relacionada em PRÊMIOS. A emissão respeita os campos, filtros, agrupamentos e ordenações configurados.</footer>';
+    }
+
+    function print_() {
+      if (!state.selectedKeys.length) { showToast_('Selecione pelo menos uma coluna antes de emitir o PDF.'); return; }
+      buildPrintReport_(); setTimeout(function () { window.print(); }, 50);
+    }
+
+    function showToast_(message) {
+      var old = document.getElementById('repToast'); if (old) old.remove();
+      var toast = document.createElement('div'); toast.id = 'repToast'; toast.className = 'report-toast'; toast.textContent = message; document.body.appendChild(toast);
+      setTimeout(function () { if (toast.parentNode) toast.remove(); }, 2600);
+    }
+
+    return Object.freeze({ init: init, open: open });
+  })();
+</script>

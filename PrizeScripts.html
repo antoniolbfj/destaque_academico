@@ -1,0 +1,139 @@
+<script>
+  var PrizePanelModel = (function () {
+    var state = { panel:null, context:null, view:'list', selectedId:'', isNew:false, busy:false };
+    function resetList(){ state.view='list'; state.selectedId=''; state.isNew=false; }
+    function selected(){
+      if(state.isNew||!state.context)return null;
+      return (state.context.prizes||[]).find(function(p){return p.id===state.selectedId;})||null;
+    }
+    return Object.freeze({state:state,resetList:resetList,selected:selected});
+  })();
+
+  var PrizePanelView = (function(){
+    function categoryLabel_(value){
+      if(value==='REGULAR') return 'Regular';
+      if(value==='COMPLEMENTAR') return 'Complementar';
+      if(value==='EXTRAORDINÁRIO') return 'Extraordinário';
+      return value||'';
+    }
+
+    function render(){
+      if(PrizePanelModel.state.view==='detail') renderDetail_(); else renderList_();
+      updateActions();
+    }
+
+    function renderList_(){
+      var container=document.getElementById('sidePanelContent');
+      var prizes=PrizePanelModel.state.context&&PrizePanelModel.state.context.prizes||[];
+      container.innerHTML='<section class="user-admin-section">'+
+        '<div class="parameter-list-intro">Os registros ocupam a largura completa do painel. A categoria determina em qual fluxo o prêmio pode ser concedido.</div>'+
+        '<div class="admin-record-list" role="table" aria-label="Prêmios cadastrados">'+
+          '<div class="admin-record-row admin-record-head" role="row"><span>Prêmio</span><span>Categoria</span><span>Situação</span></div>'+
+          (prizes.map(function(prize){
+            var badge=prize.status==='ATIVA'?'text-bg-success':'text-bg-secondary';
+            return '<button type="button" class="admin-record-row admin-record-item" data-prize-id="'+UiUtil.escapeAttr(prize.id)+'" role="row">'+
+              '<span><strong>'+UiUtil.escapeHtml(prize.description)+'</strong><small>'+UiUtil.escapeHtml(prize.id)+'</small></span>'+
+              '<span><span class="admin-category-chip">'+UiUtil.escapeHtml(categoryLabel_(prize.category))+'</span></span>'+
+              '<span><span class="badge '+badge+'">'+UiUtil.escapeHtml(prize.status)+'</span></span>'+
+            '</button>';
+          }).join('')||'<div class="parameter-empty p-3">Nenhum prêmio cadastrado.</div>')+
+        '</div></section>';
+      container.querySelectorAll('[data-prize-id]').forEach(function(row){
+        row.addEventListener('click',function(){PrizePanelController.select(row.dataset.prizeId);});
+      });
+    }
+
+    function renderDetail_(){
+      var state=PrizePanelModel.state;
+      var selected=PrizePanelModel.selected();
+      if(!state.isNew&&!selected){PrizePanelModel.resetList();renderList_();return;}
+      var context=state.context||{};
+      var statuses=context.statuses||[];
+      var categories=context.categories||[];
+      var currentStatus=selected?selected.status:'ATIVA';
+      var currentCategory=selected?selected.category:'REGULAR';
+      var container=document.getElementById('sidePanelContent');
+      container.innerHTML='<section class="user-admin-section">'+
+        '<button id="btnPrizeBack" type="button" class="btn btn-link btn-sm p-0 mb-3"><i class="bi bi-arrow-left me-1"></i>Voltar para prêmios</button>'+
+        '<div class="admin-detail-line mb-3"><div><small>'+(state.isNew?'NOVO CADASTRO':'PRÊMIO CADASTRADO')+'</small><strong>'+(state.isNew?'Novo prêmio':UiUtil.escapeHtml(selected.description))+'</strong></div><span>'+UiUtil.escapeHtml(state.isNew?'ID gerado ao salvar':selected.id)+'</span></div>'+
+        '<div class="mb-3"><label for="prizeDescription" class="form-label normal-label">Descrição</label><input id="prizeDescription" class="form-control" maxlength="160" value="'+UiUtil.escapeAttr(selected?selected.description:'')+'"></div>'+
+        '<div class="row g-2 mb-3"><div class="col-7"><label for="prizeCategory" class="form-label normal-label">Categoria do prêmio</label><select id="prizeCategory" class="form-select">'+
+          categories.map(function(category){return '<option value="'+UiUtil.escapeAttr(category)+'" '+(category===currentCategory?'selected':'')+'>'+UiUtil.escapeHtml(categoryLabel_(category))+'</option>';}).join('')+
+        '</select><div class="form-text">Regular: Mesa de Apuração · Complementar: Premiados · Extraordinário: Cadastro manual.</div></div>'+
+        '<div class="col-5"><label for="prizeStatus" class="form-label normal-label">Situação</label><select id="prizeStatus" class="form-select">'+
+          statuses.map(function(status){return '<option value="'+UiUtil.escapeAttr(status)+'" '+(status===currentStatus?'selected':'')+'>'+UiUtil.escapeHtml(status)+'</option>';}).join('')+
+        '</select></div></div>'+
+        '<div class="admin-info-note"><i class="bi bi-info-circle"></i><span>A origem da concessão é registrada separadamente pelo fluxo do sistema e não é escolhida neste cadastro.</span></div>'+
+      '</section>';
+      document.getElementById('btnPrizeBack').addEventListener('click',PrizePanelController.backToList);
+    }
+
+    function values(){
+      return {
+        id:PrizePanelModel.state.isNew?'':PrizePanelModel.state.selectedId,
+        description:String(document.getElementById('prizeDescription')&&document.getElementById('prizeDescription').value||'').trim(),
+        category:String(document.getElementById('prizeCategory')&&document.getElementById('prizeCategory').value||''),
+        status:String(document.getElementById('prizeStatus')&&document.getElementById('prizeStatus').value||'')
+      };
+    }
+    function setBusy(busy){PrizePanelModel.state.busy=Boolean(busy);updateActions();var c=document.getElementById('sidePanelContent');if(c)c.setAttribute('aria-busy',busy?'true':'false');}
+    function updateActions(){
+      var s=PrizePanelModel.state,selected=PrizePanelModel.selected();
+      document.getElementById('btnPrizeNew').disabled=s.busy;
+      document.getElementById('btnPrizeSave').disabled=s.busy||s.view!=='detail';
+      document.getElementById('btnPrizeDelete').disabled=s.busy||s.view!=='detail'||s.isNew||!selected;
+    }
+    return Object.freeze({render:render,values:values,setBusy:setBusy,updateActions:updateActions});
+  })();
+
+  var PrizePanelController=(function(){
+    function init(){
+      PrizePanelModel.state.panel=bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('sidePanel'),{backdrop:true,keyboard:true,scroll:false});
+      document.getElementById('menuPrizes').addEventListener('click',open);
+      document.getElementById('btnPrizeNew').addEventListener('click',createNew);
+      document.getElementById('btnPrizeSave').addEventListener('click',save);
+      document.getElementById('btnPrizeDelete').addEventListener('click',remove);
+    }
+    async function open(){
+      if(!AppModel.state.permissions||!AppModel.state.permissions.canManageCruds)return;
+      document.getElementById('sidePanelTitle').textContent='Prêmios';
+      document.getElementById('userPanelActions').hidden=true;document.getElementById('prizePanelActions').hidden=false;document.getElementById('parameterPanelActions').hidden=true;document.getElementById('dataPanelActions').hidden=true;document.getElementById('recordPanelActions').hidden=true;
+      PrizePanelModel.state.panel.show();PrizePanelModel.resetList();UiUtil.setSideStatus(12,'info','Carregando prêmios.');PrizePanelView.setBusy(true);
+      try{PrizePanelModel.state.context=await ApiClient.authenticatedCall('getPrizeAdminContext');PrizePanelView.render();UiUtil.setSideStatus(100,'success',String((PrizePanelModel.state.context.prizes||[]).length)+' prêmio(s) cadastrado(s).');}
+      catch(error){UiUtil.setSideStatus(0,'error',UiUtil.actionableErrorMessage(error,'Não foi possível carregar os prêmios.'));}
+      finally{PrizePanelView.setBusy(false);}
+    }
+    function select(id){PrizePanelModel.state.selectedId=id;PrizePanelModel.state.isNew=false;PrizePanelModel.state.view='detail';PrizePanelView.render();UiUtil.setSideStatus(0,'info','Consulte ou atualize o prêmio.');}
+    function backToList(){PrizePanelModel.resetList();PrizePanelView.render();UiUtil.setSideStatus(0,'info','Selecione um prêmio para consultar ou editar.');}
+    function createNew(){if(PrizePanelModel.state.busy||!PrizePanelModel.state.context)return;PrizePanelModel.state.isNew=true;PrizePanelModel.state.selectedId='';PrizePanelModel.state.view='detail';PrizePanelView.render();UiUtil.setSideStatus(0,'info','Informe descrição, categoria e situação do prêmio.');var i=document.getElementById('prizeDescription');if(i)i.focus();}
+    function syncWorkspaces_(){
+      var prizes=PrizePanelModel.state.context.prizes||[];
+      try{
+        ApurationWorkspaceController.refreshPrizes(prizes);
+        AwardeeWorkspaceController.refreshPrizes(prizes);
+        ManualAwardeeWorkspaceController.refreshPrizes(prizes);
+        return true;
+      }catch(error){
+        UiUtil.setSideStatus(100,'warning','Cadastro salvo. Não foi possível atualizar todos os campos de prêmio: '+UiUtil.actionableErrorMessage(error));
+        return false;
+      }
+    }
+    async function save(){
+      if(PrizePanelModel.state.busy||PrizePanelModel.state.view!=='detail')return;
+      var payload=PrizePanelView.values();
+      if(!payload.description||!payload.category||!payload.status){UiUtil.setSideStatus(0,'warning','Preencha descrição, categoria e situação antes de salvar.');return;}
+      PrizePanelView.setBusy(true);UiUtil.setSideStatus(40,'info','Salvando prêmio.');
+      try{PrizePanelModel.state.context=await ApiClient.authenticatedCall('savePrize',payload);PrizePanelModel.resetList();PrizePanelView.render();if(syncWorkspaces_())UiUtil.setSideStatus(100,'success','Prêmio salvo. Campos de escolha atualizados.');}
+      catch(error){UiUtil.setSideStatus(0,'error',UiUtil.actionableErrorMessage(error,'Não foi possível salvar o prêmio.'));}
+      finally{PrizePanelView.setBusy(false);}
+    }
+    async function remove(){
+      var selected=PrizePanelModel.selected();if(!selected||PrizePanelModel.state.busy)return;
+      PrizePanelView.setBusy(true);UiUtil.setSideStatus(35,'info','Verificando vínculos e excluindo prêmio.');
+      try{PrizePanelModel.state.context=await ApiClient.authenticatedCall('deletePrize',selected.id);PrizePanelModel.resetList();PrizePanelView.render();if(syncWorkspaces_())UiUtil.setSideStatus(100,'success','Prêmio excluído. Campos de escolha atualizados.');}
+      catch(error){UiUtil.setSideStatus(0,'error',UiUtil.actionableErrorMessage(error,'Não foi possível excluir o prêmio.'));}
+      finally{PrizePanelView.setBusy(false);}
+    }
+    return Object.freeze({init:init,open:open,select:select,backToList:backToList,createNew:createNew,save:save,remove:remove});
+  })();
+</script>

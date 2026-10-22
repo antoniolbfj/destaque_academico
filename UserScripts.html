@@ -1,0 +1,235 @@
+<script>
+  /** Model do módulo Usuários. */
+  var UserPanelModel = (function () {
+    var state = {
+      panel: null,
+      context: null,
+      view: 'list',
+      selectedEmail: '',
+      isNew: false,
+      busy: false
+    };
+
+    function resetList() {
+      state.view = 'list';
+      state.selectedEmail = '';
+      state.isNew = false;
+    }
+
+    function selected() {
+      if (state.isNew || !state.context) return null;
+      return (state.context.users || []).find(function (user) { return user.email === state.selectedEmail; }) || null;
+    }
+
+    return Object.freeze({ state: state, resetList: resetList, selected: selected });
+  })();
+
+  /** View do painel lateral de usuários. */
+  var UserPanelView = (function () {
+    function render() {
+      if (UserPanelModel.state.view === 'detail') renderDetail();
+      else renderList();
+      updateActions();
+    }
+
+    function renderList() {
+      var container = document.getElementById('sidePanelContent');
+      var users = UserPanelModel.state.context && UserPanelModel.state.context.users || [];
+      container.innerHTML = '<section class="user-admin-section">' +
+        '<div class="parameter-list-intro">Selecione um usuário para consultar ou atualizar o cadastro.</div>' +
+        '<div class="user-admin-list" role="table" aria-label="Usuários cadastrados">' +
+          '<div class="user-admin-row user-admin-head" role="row"><span>Nome</span><span>Perfil</span><span>E-mail</span></div>' +
+          (users.map(function (user) {
+            var badge = user.isOwner ? 'text-bg-dark' : (user.profile === 'Admin' ? 'text-bg-success' : 'text-bg-warning text-dark');
+            return '<button type="button" class="user-admin-row user-admin-item" data-user-email="' + UiUtil.escapeAttr(user.email) + '" role="row">' +
+              '<span class="user-admin-name">' + UiUtil.escapeHtml(user.name) + '</span>' +
+              '<span><span class="badge ' + badge + '">' + UiUtil.escapeHtml(user.profile) + '</span></span>' +
+              '<span class="user-admin-email">' + UiUtil.escapeHtml(user.email) + '</span>' +
+            '</button>';
+          }).join('') || '<div class="parameter-empty p-3">Nenhum usuário cadastrado.</div>') +
+        '</div></section>';
+
+      container.querySelectorAll('[data-user-email]').forEach(function (row) {
+        row.addEventListener('click', function () { UserPanelController.select(row.dataset.userEmail); });
+      });
+    }
+
+    function renderDetail() {
+      var state = UserPanelModel.state;
+      var selected = UserPanelModel.selected();
+      if (!state.isNew && !selected) {
+        UserPanelModel.resetList();
+        renderList();
+        return;
+      }
+
+      var container = document.getElementById('sidePanelContent');
+      var isOwner = Boolean(selected && selected.isOwner);
+      var canEditOwner = Boolean(state.context && state.context.canEditOwner);
+      var lockedOwner = isOwner && !canEditOwner;
+      var profiles = state.context && state.context.profiles || [];
+      var currentProfile = selected ? selected.profile : '';
+
+      container.innerHTML = '<section class="user-admin-section">' +
+        '<button id="btnUserBack" type="button" class="btn btn-link btn-sm p-0 mb-2"><i class="bi bi-arrow-left me-1"></i>Voltar para usuários</button>' +
+        '<div class="parameter-set-card mb-2">' +
+          '<div class="parameter-set-code">' + (state.isNew ? 'NOVO USUÁRIO' : UiUtil.escapeHtml(selected.email)) + '</div>' +
+          '<div class="parameter-set-name">' + (state.isNew ? 'Cadastro de acesso' : UiUtil.escapeHtml(selected.name)) + '</div>' +
+          (isOwner ? '<span class="badge text-bg-dark">Proprietário da planilha</span>' : '') +
+        '</div>' +
+        '<div><label for="userAdminName" class="form-label normal-label">Nome</label>' +
+          '<input id="userAdminName" class="form-control" maxlength="120" value="' + UiUtil.escapeAttr(selected ? selected.name : '') + '" ' + (lockedOwner ? 'disabled' : '') + '></div>' +
+        '<div><label for="userAdminEmail" class="form-label normal-label">E-mail</label>' +
+          '<input id="userAdminEmail" class="form-control" type="email" maxlength="200" value="' + UiUtil.escapeAttr(selected ? selected.email : '') + '" ' + (isOwner ? 'disabled' : '') + '></div>' +
+        '<div><label for="userAdminProfile" class="form-label normal-label">Perfil</label>' +
+          (isOwner
+            ? '<select id="userAdminProfile" class="form-select" disabled><option selected>Superusuário</option></select>'
+            : '<select id="userAdminProfile" class="form-select" ' + (lockedOwner ? 'disabled' : '') + '>' +
+                '<option value="">Selecione o perfil</option>' +
+                profiles.map(function (profile) {
+                  return '<option value="' + UiUtil.escapeAttr(profile) + '" ' + (profile === currentProfile ? 'selected' : '') + '>' + UiUtil.escapeHtml(profile) + '</option>';
+                }).join('') + '</select>') +
+          '<div class="form-text">Somente Admin e Superusuário possuem acesso ao módulo de usuários nesta etapa.</div></div>' +
+      '</section>';
+
+      document.getElementById('btnUserBack').addEventListener('click', UserPanelController.backToList);
+    }
+
+    function values() {
+      var selected = UserPanelModel.selected();
+      return {
+        originalEmail: UserPanelModel.state.isNew ? '' : UserPanelModel.state.selectedEmail,
+        name: String(document.getElementById('userAdminName') && document.getElementById('userAdminName').value || '').trim(),
+        email: selected && selected.isOwner ? selected.email : String(document.getElementById('userAdminEmail') && document.getElementById('userAdminEmail').value || '').trim(),
+        profile: selected && selected.isOwner ? 'Superusuário' : String(document.getElementById('userAdminProfile') && document.getElementById('userAdminProfile').value || '')
+      };
+    }
+
+    function setBusy(busy) {
+      UserPanelModel.state.busy = Boolean(busy);
+      updateActions();
+      var content = document.getElementById('sidePanelContent');
+      if (content) content.setAttribute('aria-busy', busy ? 'true' : 'false');
+    }
+
+    function updateActions() {
+      var state = UserPanelModel.state;
+      var selected = UserPanelModel.selected();
+      document.getElementById('btnUserNew').disabled = state.busy;
+      document.getElementById('btnUserSave').disabled = state.busy || state.view !== 'detail';
+      document.getElementById('btnUserDelete').disabled = state.busy || state.view !== 'detail' || state.isNew || !selected || selected.isOwner;
+    }
+
+    return Object.freeze({ render: render, values: values, setBusy: setBusy, updateActions: updateActions });
+  })();
+
+  /** Controller do módulo Usuários. */
+  var UserPanelController = (function () {
+    function init() {
+      UserPanelModel.state.panel = bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('sidePanel'), {
+        backdrop: true, keyboard: true, scroll: false
+      });
+      document.getElementById('menuUsers').addEventListener('click', open);
+      document.getElementById('btnUserNew').addEventListener('click', createNew);
+      document.getElementById('btnUserSave').addEventListener('click', save);
+      document.getElementById('btnUserDelete').addEventListener('click', remove);
+    }
+
+    async function open() {
+      if (!AppModel.state.permissions || !AppModel.state.permissions.canManageUsers) return;
+      document.getElementById('sidePanelTitle').textContent = 'Usuários';
+      document.getElementById('userPanelActions').hidden = false;
+      document.getElementById('prizePanelActions').hidden = true;
+      document.getElementById('parameterPanelActions').hidden = true;
+      document.getElementById('dataPanelActions').hidden = true;
+      document.getElementById('recordPanelActions').hidden = true;
+      UserPanelModel.state.panel.show();
+      UserPanelModel.resetList();
+      UiUtil.setSideStatus(12, 'info', 'Carregando usuários cadastrados.');
+      UserPanelView.setBusy(true);
+      try {
+        UserPanelModel.state.context = await ApiClient.authenticatedCall('getUserAdminContext');
+        UserPanelView.render();
+        UiUtil.setSideStatus(100, 'success', String((UserPanelModel.state.context.users || []).length) + ' usuário(s) cadastrado(s).');
+      } catch (error) {
+        UiUtil.setSideStatus(0, 'error', UiUtil.actionableErrorMessage(error, 'Não foi possível carregar os usuários cadastrados.'));
+      } finally {
+        UserPanelView.setBusy(false);
+      }
+    }
+
+    function select(email) {
+      UserPanelModel.state.selectedEmail = email;
+      UserPanelModel.state.isNew = false;
+      UserPanelModel.state.view = 'detail';
+      UserPanelView.render();
+      UiUtil.setSideStatus(0, 'info', 'Edite os dados e salve somente quando necessário.');
+    }
+
+    function backToList() {
+      UserPanelModel.resetList();
+      UserPanelView.render();
+      UiUtil.setSideStatus(0, 'info', 'Selecione um usuário para consultar ou editar.');
+    }
+
+    function createNew() {
+      if (UserPanelModel.state.busy || !UserPanelModel.state.context) return;
+      UserPanelModel.state.isNew = true;
+      UserPanelModel.state.selectedEmail = '';
+      UserPanelModel.state.view = 'detail';
+      UserPanelView.render();
+      UiUtil.setSideStatus(0, 'info', 'Informe nome, e-mail e perfil para cadastrar o novo usuário.');
+      var input = document.getElementById('userAdminName');
+      if (input) input.focus();
+    }
+
+    async function save() {
+      if (UserPanelModel.state.busy || UserPanelModel.state.view !== 'detail') return;
+      var payload = UserPanelView.values();
+      if (!payload.name || !payload.email || !payload.profile) {
+        UiUtil.setSideStatus(0, 'warning', 'Preencha nome, e-mail e perfil antes de salvar.');
+        return;
+      }
+
+      UserPanelView.setBusy(true);
+      UiUtil.setSideStatus(40, 'info', 'Salvando cadastro do usuário.');
+      try {
+        UserPanelModel.state.context = await ApiClient.authenticatedCall('saveUser', payload);
+        UserPanelModel.resetList();
+        UserPanelView.render();
+        UiUtil.setSideStatus(100, 'success', 'Usuário salvo com sucesso.');
+      } catch (error) {
+        UiUtil.setSideStatus(0, 'error', UiUtil.actionableErrorMessage(error, 'Não foi possível salvar o usuário.'));
+      } finally {
+        UserPanelView.setBusy(false);
+      }
+    }
+
+    var deleteArmedUntil = 0;
+    async function remove() {
+      if (UserPanelModel.state.busy || UserPanelModel.state.isNew || !UserPanelModel.state.selectedEmail) return;
+      var selected = UserPanelModel.selected();
+      if (!selected || selected.isOwner) return;
+      if (Date.now() > deleteArmedUntil) {
+        deleteArmedUntil = Date.now() + 5000;
+        UiUtil.setSideStatus(0, 'warning', selected.name + ' perderá o acesso. Clique novamente em Excluir para confirmar.');
+        return;
+      }
+      deleteArmedUntil = 0;
+      UserPanelView.setBusy(true);
+      UiUtil.setSideStatus(40, 'info', 'Excluindo usuário.');
+      try {
+        UserPanelModel.state.context = await ApiClient.authenticatedCall('deleteUser', selected.email);
+        UserPanelModel.resetList();
+        UserPanelView.render();
+        UiUtil.setSideStatus(100, 'success', 'Usuário excluído com sucesso.');
+      } catch (error) {
+        UiUtil.setSideStatus(0, 'error', UiUtil.actionableErrorMessage(error, 'Não foi possível excluir o usuário.'));
+      } finally {
+        UserPanelView.setBusy(false);
+      }
+    }
+
+    return Object.freeze({ init: init, open: open, select: select, backToList: backToList });
+  })();
+</script>

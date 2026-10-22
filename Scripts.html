@@ -1,0 +1,415 @@
+<script>
+  /** Frontend MVC: Model de estado global. */
+  var AppModel = (function () {
+    var TOKEN_KEY = 'topplus_dev_auth_token';
+    var state = {
+      authToken: localStorage.getItem(TOKEN_KEY) || '',
+      user: null,
+      permissions: null,
+      bootstrap: null,
+      loading: false,
+      loadingStartedAt: 0,
+      loadingTimer: null
+    };
+
+    function setToken(token) {
+      state.authToken = token || '';
+      if (state.authToken) localStorage.setItem(TOKEN_KEY, state.authToken);
+      else localStorage.removeItem(TOKEN_KEY);
+    }
+
+    function clearSession() {
+      setToken('');
+      state.user = null;
+      state.permissions = null;
+      state.bootstrap = null;
+    }
+
+    return Object.freeze({ state: state, setToken: setToken, clearSession: clearSession });
+  })();
+
+  /** Serviço de comunicação com controllers do Apps Script. */
+  var ApiClient = (function () {
+    function normalizeError(error) {
+      if (error instanceof Error) return error;
+      var message = error && error.message ? error.message : String(error || 'Erro desconhecido.');
+      return new Error(message);
+    }
+
+    function invoke(functionName, args) {
+      return new Promise(function (resolve, reject) {
+        var runner = google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(function (error) { reject(normalizeError(error)); });
+        var method = runner[functionName];
+        if (typeof method !== 'function') {
+          reject(new Error('A função do servidor "' + functionName + '" não está disponível nesta versão publicada. Atualize a implantação do Web App.'));
+          return;
+        }
+        method.apply(runner, args || []);
+      });
+    }
+
+    function publicCall(functionName) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      return invoke(functionName, args);
+    }
+
+    function authenticatedCall(functionName) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      return invoke(functionName, [AppModel.state.authToken || ''].concat(args));
+    }
+
+    return Object.freeze({ publicCall: publicCall, authenticatedCall: authenticatedCall });
+  })();
+
+  var UiUtil = (function () {
+    function escapeHtml(value) {
+      return String(value === null || value === undefined ? '' : value)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    }
+
+    function actionableErrorMessage(error, fallback) {
+      var message = error && error.message ? String(error.message) : String(error || '');
+      return message.trim() || fallback || 'Ocorreu um erro inesperado.';
+    }
+
+    function setSideStatus(percent, type, message) {
+      var value = Math.max(0, Math.min(100, Number(percent) || 0));
+      document.getElementById('sideStatusPercent').textContent = value + '%';
+      document.getElementById('sideStatusText').textContent = message || '';
+      document.getElementById('sideProgressBar').style.width = value + '%';
+      var icon = document.getElementById('sideStatusIcon');
+      var icons = {
+        success: 'bi-check-circle-fill', warning: 'bi-exclamation-triangle-fill',
+        error: 'bi-x-circle-fill', info: 'bi-info-circle-fill'
+      };
+      icon.innerHTML = '<i class="bi ' + (icons[type] || icons.info) + '"></i>';
+    }
+
+    return Object.freeze({
+      escapeHtml: escapeHtml,
+      escapeAttr: escapeHtml,
+      actionableErrorMessage: actionableErrorMessage,
+      setSideStatus: setSideStatus
+    });
+  })();
+
+  /** View principal/autenticação/carregamento. */
+  var AppView = (function () {
+    function bind(handlers) {
+      document.getElementById('btnSendLoginCode').addEventListener('click', handlers.requestCode);
+      document.getElementById('btnVerifyLoginCode').addEventListener('click', handlers.verifyCode);
+      document.getElementById('authIdentityButton').addEventListener('click', handlers.logout);
+      document.getElementById('startupRetry').addEventListener('click', handlers.load);
+      document.getElementById('loginEmail').addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') handlers.requestCode();
+      });
+      document.getElementById('loginCode').addEventListener('input', function (event) {
+        event.target.value = event.target.value.replace(/\D/g, '').slice(0, 6);
+      });
+      document.getElementById('loginCode').addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') handlers.verifyCode();
+      });
+    }
+
+    function loginValues() {
+      return {
+        email: String(document.getElementById('loginEmail').value || '').trim(),
+        code: String(document.getElementById('loginCode').value || '').replace(/\D/g, '')
+      };
+    }
+
+    function setLoginBusy(busy) {
+      ['btnSendLoginCode', 'btnVerifyLoginCode', 'loginEmail', 'loginCode'].forEach(function (id) {
+        document.getElementById(id).disabled = Boolean(busy);
+      });
+    }
+
+    function setLoginMessage(type, message) {
+      var box = document.getElementById('loginMessage');
+      if (!message) {
+        box.className = 'alert alert-light border mt-3 mb-0 d-none';
+        box.textContent = '';
+        return;
+      }
+      box.className = 'alert alert-' + (type || 'light') + ' mt-3 mb-0';
+      box.textContent = message;
+    }
+
+    function revealCodeStep() {
+      document.getElementById('loginCodeStep').hidden = false;
+      document.getElementById('btnVerifyLoginCode').hidden = false;
+      document.getElementById('loginCode').focus();
+    }
+
+    function showLogin() {
+      document.getElementById('startupScreen').hidden = true;
+      document.getElementById('publicAwardeeScreen').hidden = true;
+      document.getElementById('publicPortalConfigWorkspace').hidden = true;
+      document.getElementById('mainContent').hidden = true;
+      document.getElementById('awardeeWorkspace').hidden = true;
+      document.getElementById('manualAwardeeWorkspace').hidden = true;
+      document.getElementById('awardeeReportWorkspace').hidden = true;
+      document.getElementById('authenticatedShell').hidden = true;
+      document.body.classList.remove('authenticated-mode');
+      document.getElementById('publicHeader').hidden = false;
+      document.getElementById('btnRestrictedAccess').hidden = true;
+      document.getElementById('loginScreen').hidden = false;
+      document.getElementById('authIdentityButton').hidden = true;
+      document.getElementById('menuUsers').hidden = true;
+      document.getElementById('menuPrizes').hidden = true;
+      document.getElementById('menuParameters').hidden = true;
+      document.getElementById('menuManageData').hidden = true;
+      document.getElementById('menuAwardees').hidden = true;
+      document.getElementById('menuManualAwardees').hidden = true;
+      document.getElementById('menuAwardeeReports').hidden = true;
+      document.getElementById('menuOccurrences').hidden = true;
+      document.getElementById('menuPublicPortal').hidden = true;
+      document.getElementById('loginEmail').focus({ preventScroll: true });
+    }
+
+    function beginStartup() {
+      document.getElementById('loginScreen').hidden = true;
+      document.getElementById('publicAwardeeScreen').hidden = true;
+      document.getElementById('publicPortalConfigWorkspace').hidden = true;
+      document.getElementById('mainContent').hidden = true;
+      document.getElementById('awardeeWorkspace').hidden = true;
+      document.getElementById('manualAwardeeWorkspace').hidden = true;
+      document.getElementById('awardeeReportWorkspace').hidden = true;
+      document.getElementById('authenticatedShell').hidden = true;
+      document.body.classList.remove('authenticated-mode');
+      document.getElementById('publicHeader').hidden = false;
+      document.getElementById('btnRestrictedAccess').hidden = true;
+      document.getElementById('startupScreen').hidden = false;
+      document.getElementById('startupRetry').hidden = true;
+      document.getElementById('startupCard').dataset.startupState = 'loading';
+      setStartupProgress(10, 'session', 'Validando sessão…');
+    }
+
+    function finishStartup() {
+      document.getElementById('startupScreen').hidden = true;
+      document.getElementById('publicAwardeeScreen').hidden = true;
+      document.getElementById('publicPortalConfigWorkspace').hidden = true;
+      document.getElementById('publicHeader').hidden = true;
+      document.getElementById('authenticatedShell').hidden = false;
+      document.getElementById('mainContent').hidden = false;
+      document.getElementById('awardeeWorkspace').hidden = true;
+      document.getElementById('manualAwardeeWorkspace').hidden = true;
+      document.getElementById('awardeeReportWorkspace').hidden = true;
+      document.body.classList.add('authenticated-mode');
+    }
+
+    function startupError(message) {
+      document.getElementById('startupCard').dataset.startupState = 'error';
+      document.getElementById('startupMessage').textContent = message;
+      document.getElementById('startupDetail').textContent = 'Falha na inicialização.';
+      document.getElementById('startupRetry').hidden = false;
+    }
+
+    function setStartupProgress(percent, activeStage, detail) {
+      var value = Math.max(0, Math.min(100, Number(percent) || 0));
+      document.getElementById('startupPercent').textContent = value + '%';
+      document.getElementById('startupProgressBar').style.width = value + '%';
+      document.getElementById('startupDetail').textContent = detail || '';
+      document.querySelector('.startup-progress').setAttribute('aria-valuenow', String(value));
+
+      var order = ['session', 'permissions', 'interface', 'finalize'];
+      var activeIndex = order.indexOf(activeStage);
+      document.querySelectorAll('[data-startup-stage]').forEach(function (row) {
+        var index = order.indexOf(row.dataset.startupStage);
+        row.classList.remove('is-active', 'is-complete', 'is-error');
+        var icon = row.querySelector('.startup-stage-icon i');
+        if (index < activeIndex || value === 100) {
+          row.classList.add('is-complete');
+          icon.className = 'bi bi-check-circle-fill';
+        } else if (index === activeIndex) {
+          row.classList.add('is-active');
+          icon.className = 'bi bi-arrow-repeat';
+        } else {
+          icon.className = 'bi bi-circle';
+        }
+      });
+    }
+
+    function renderAuthenticated(user, permissions) {
+      var authenticated = Boolean(user && permissions);
+      document.getElementById('authIdentityButton').hidden = !authenticated;
+      document.getElementById('authUserName').textContent = authenticated ? user.name : '';
+      document.getElementById('authUserProfile').textContent = authenticated ? user.profile : '';
+      document.getElementById('menuUsers').hidden = !(authenticated && permissions.canManageUsers);
+      document.getElementById('menuPrizes').hidden = !(authenticated && permissions.canManageCruds);
+      document.getElementById('menuParameters').hidden = !(authenticated && permissions.canManageCruds);
+      document.getElementById('menuManageData').hidden = !(authenticated && permissions.canManageData);
+      document.getElementById('menuAwardees').hidden = !(authenticated && permissions.canManageRecords);
+      document.getElementById('menuManualAwardees').hidden = !(authenticated && permissions.canManageRecords);
+      document.getElementById('menuAwardeeReports').hidden = !(authenticated && permissions.canManageRecords);
+      document.getElementById('menuOccurrences').hidden = !(authenticated && permissions.canManageRecords);
+      document.getElementById('menuPublicPortal').hidden = !(authenticated && permissions.canManagePublicPortal);
+    }
+
+    function resetLoginForm() {
+      document.getElementById('loginEmail').value = '';
+      document.getElementById('loginCode').value = '';
+      document.getElementById('loginCodeStep').hidden = true;
+      document.getElementById('btnVerifyLoginCode').hidden = true;
+      setLoginMessage('', '');
+    }
+
+    return Object.freeze({
+      bind: bind,
+      loginValues: loginValues,
+      setLoginBusy: setLoginBusy,
+      setLoginMessage: setLoginMessage,
+      revealCodeStep: revealCodeStep,
+      showLogin: showLogin,
+      beginStartup: beginStartup,
+      finishStartup: finishStartup,
+      startupError: startupError,
+      setStartupProgress: setStartupProgress,
+      renderAuthenticated: renderAuthenticated,
+      resetLoginForm: resetLoginForm
+    });
+  })();
+
+  /** Controller principal do frontend. */
+  var AppController = (function () {
+    function init() {
+      AppView.bind({
+        requestCode: requestCode,
+        verifyCode: verifyCode,
+        logout: logout,
+        load: load
+      });
+      UserPanelController.init();
+      PrizePanelController.init();
+      ParameterPanelController.init();
+      DataImportPanelController.init();
+      PermanentRecordPanelController.init();
+      AwardeeWorkspaceController.init();
+      ManualAwardeeWorkspaceController.init();
+      AwardeeReportWorkspaceController.init();
+      PublicAwardeePortalController.init();
+      PublicAwardeeSettingsController.init();
+      ApurationWorkspaceController.init();
+      if (!AppModel.state.authToken) PublicAwardeePortalController.show();
+      else load();
+    }
+
+    async function requestCode() {
+      var values = AppView.loginValues();
+      if (!values.email) {
+        AppView.setLoginMessage('warning', 'Informe seu e-mail.');
+        return;
+      }
+      AppView.setLoginBusy(true);
+      AppView.setLoginMessage('info', 'Solicitando código de acesso…');
+      try {
+        var result = await ApiClient.publicCall('requestLoginCode', values.email);
+        AppView.revealCodeStep();
+        AppView.setLoginMessage('success', result && result.message ? result.message : 'Código enviado.');
+      } catch (error) {
+        AppView.setLoginMessage('danger', UiUtil.actionableErrorMessage(error, 'Não foi possível solicitar o código.'));
+      } finally {
+        AppView.setLoginBusy(false);
+      }
+    }
+
+    async function verifyCode() {
+      var values = AppView.loginValues();
+      if (!values.email || values.code.length !== 6) {
+        AppView.setLoginMessage('warning', 'Informe o e-mail e o código de 6 dígitos.');
+        return;
+      }
+      AppView.setLoginBusy(true);
+      AppView.setLoginMessage('info', 'Validando código…');
+      try {
+        var result = await ApiClient.publicCall('verifyLoginCode', values.email, values.code);
+        AppModel.setToken(result.token || '');
+        AppModel.state.user = result.user || null;
+        AppModel.state.permissions = result.permissions || {};
+        await load();
+      } catch (error) {
+        AppView.setLoginMessage('danger', UiUtil.actionableErrorMessage(error, 'Não foi possível validar o código.'));
+      } finally {
+        AppView.setLoginBusy(false);
+      }
+    }
+
+    async function load() {
+      var state = AppModel.state;
+      if (state.loading) return;
+      state.loading = true;
+      state.loadingStartedAt = Date.now();
+      if (state.loadingTimer) clearInterval(state.loadingTimer);
+      state.loadingTimer = setInterval(updateElapsed, 1000);
+      AppView.beginStartup();
+
+      try {
+        AppView.setStartupProgress(20, 'session', 'Validando sessão autenticada.');
+        var context = await ApiClient.authenticatedCall('getBootstrapContext');
+        if (!context || !context.authenticated) throw new Error('Sessão inválida. Faça login novamente.');
+
+        state.bootstrap = context;
+        state.user = context.user || null;
+        state.permissions = context.permissions || {};
+        AppView.setStartupProgress(60, 'permissions', 'Permissões carregadas.');
+        AppView.renderAuthenticated(state.user, state.permissions);
+        AppView.setStartupProgress(88, 'interface', 'Preparando os módulos administrativos.');
+        AppView.setStartupProgress(100, 'finalize', 'Sistema pronto.');
+        AppView.finishStartup();
+        await ApurationWorkspaceController.load();
+      } catch (error) {
+        var message = UiUtil.actionableErrorMessage(error, 'Não foi possível carregar o sistema.');
+        AppView.startupError(message);
+        if (/sessão|autentic/i.test(message)) {
+          AppModel.clearSession();
+          AppView.showLogin();
+        }
+      } finally {
+        if (state.loadingTimer) clearInterval(state.loadingTimer);
+        state.loadingTimer = null;
+        state.loading = false;
+      }
+    }
+
+    function updateElapsed() {
+      var seconds = Math.max(0, Math.floor((Date.now() - AppModel.state.loadingStartedAt) / 1000));
+      document.getElementById('startupElapsed').textContent = 'Tempo decorrido: ' + seconds + ' s';
+    }
+
+    var logoutArmedUntil = 0;
+    async function logout() {
+      var button = document.getElementById('authIdentityButton');
+      if (Date.now() > logoutArmedUntil) {
+        logoutArmedUntil = Date.now() + 4000;
+        button.classList.add('is-logout-armed');
+        document.getElementById('authUserProfile').textContent = 'Clique novamente para sair';
+        setTimeout(function () {
+          if (Date.now() > logoutArmedUntil) {
+            button.classList.remove('is-logout-armed');
+            if (AppModel.state.user) document.getElementById('authUserProfile').textContent = AppModel.state.user.profile || '';
+          }
+        }, 4100);
+        return;
+      }
+      if (AwardeeWorkspaceController.hasPendingDecisions()) {
+        AwardeeWorkspaceController.requestLogout();
+        return;
+      }
+      if (ApurationWorkspaceController.hasPendingDecisions()) {
+        ApurationWorkspaceController.requestLogout();
+        return;
+      }
+      try { await ApiClient.authenticatedCall('logoutSession'); } catch (error) { console.error(error); }
+      AppModel.clearSession();
+      AppView.resetLoginForm();
+      PublicAwardeePortalController.show();
+    }
+
+    return Object.freeze({ init: init, load: load });
+  })();
+
+  document.addEventListener('DOMContentLoaded', AppController.init);
+</script>

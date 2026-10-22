@@ -1,0 +1,125 @@
+<script>
+  var ManualAwardeeWorkspaceController=(function(){
+    var state={workspace:null,selectedId:'',filters:{search:'',year:'',prize:'',status:'',regime:''},loading:false,prizeRevision:0,latestPrizes:[]};
+
+    function init(){
+      document.getElementById('menuManualAwardees').addEventListener('click',open);
+      document.getElementById('manNew').addEventListener('click',function(){openDrawer_();});
+      document.getElementById('manClose').addEventListener('click',closeDrawer_);
+      document.getElementById('manCancel').addEventListener('click',closeDrawer_);
+      document.getElementById('manBackdrop').addEventListener('click',closeDrawer_);
+      document.getElementById('manLookup').addEventListener('click',lookupStudent_);
+      document.getElementById('manManualStudent').addEventListener('change',updateManualStudent_);
+      document.getElementById('manRegime').addEventListener('change',updateSemester_);
+      document.getElementById('manSave').addEventListener('click',save_);
+      document.getElementById('manDelete').addEventListener('click',remove_);
+      document.getElementById('manSearch').addEventListener('input',function(){state.filters.search=this.value;renderTable_();});
+      ['manYearFilter','manPrizeFilter','manStatusFilter','manRegimeFilter'].forEach(function(id){document.getElementById(id).addEventListener('change',function(){var key={manYearFilter:'year',manPrizeFilter:'prize',manStatusFilter:'status',manRegimeFilter:'regime'}[id];state.filters[key]=this.value;renderTable_();});});
+      document.getElementById('manClear').addEventListener('click',clearFilters_);
+    }
+
+    function setActive_(){
+      document.querySelectorAll('.sidebar-item').forEach(function(b){b.classList.toggle('is-active',b.id==='menuManualAwardees');});
+      document.getElementById('activeSectionTitle').textContent='Cadastro manual de premiados';
+    }
+    function showWorkspace_(){
+      document.getElementById('mainContent').hidden=true;
+      document.getElementById('awardeeWorkspace').hidden=true;
+      document.getElementById('awardeeReportWorkspace').hidden=true;
+      document.getElementById('publicPortalConfigWorkspace').hidden=true;
+      document.getElementById('manualAwardeeWorkspace').hidden=false;
+      setActive_();
+    }
+    async function open(){
+      if(!AppModel.state.permissions||!AppModel.state.permissions.canManageRecords)return;
+      showWorkspace_();
+      await load_();
+    }
+    async function load_(){
+      if(state.loading)return;state.loading=true;showMessage_('info','Carregando premiações extraordinárias…');
+      var prizeRevision=state.prizeRevision;
+      try{state.workspace=await ApiClient.authenticatedCall('getManualAwardeeWorkspace');if(prizeRevision!==state.prizeRevision)state.workspace.prizes=extraordinaryPrizes_();renderAll_();hideMessage_();}
+      catch(error){showMessage_('danger',UiUtil.actionableErrorMessage(error,'Não foi possível carregar o cadastro manual.'));}
+      finally{state.loading=false;}
+    }
+
+    function esc_(v){return UiUtil.escapeHtml(v===null||v===undefined?'':String(v));}
+    function fmtDate_(v){if(!v)return '—';try{var d=new Date(v);return isNaN(d.getTime())?String(v):d.toLocaleString('pt-BR');}catch(e){return String(v);}}
+    function statusClass_(s){return s==='HOMOLOGADO'?'is-approved':(s==='PUBLICADO'?'is-published':'is-review');}
+    function renderAll_(){renderKpis_();renderFilterOptions_();renderTable_();}
+    function renderKpis_(){var c=state.workspace&&state.workspace.counts||{};document.getElementById('manTotal').textContent=c.total||0;document.getElementById('manUnderReview').textContent=c.underReview||0;document.getElementById('manPublished').textContent=c.published||0;document.getElementById('manApproved').textContent=c.approved||0;}
+    function renderFilterOptions_(){
+      var w=state.workspace||{},records=w.records||[];
+      var years=Array.from(new Set(records.map(function(r){return String(r.year||'');}).filter(Boolean))).sort().reverse();
+      document.getElementById('manYearFilter').innerHTML='<option value="">Todos</option>'+years.map(function(y){return '<option '+(state.filters.year===y?'selected':'')+'>'+esc_(y)+'</option>';}).join('');
+      document.getElementById('manPrizeFilter').innerHTML='<option value="">Todos</option>'+(w.prizes||[]).map(function(p){return '<option value="'+UiUtil.escapeAttr(p.id)+'" '+(state.filters.prize===p.id?'selected':'')+'>'+esc_(p.description)+'</option>';}).join('');
+      document.getElementById('manStatusFilter').innerHTML='<option value="">Todas</option>'+(w.statuses||[]).map(function(s){return '<option '+(state.filters.status===s?'selected':'')+'>'+esc_(s)+'</option>';}).join('');
+      document.getElementById('manRegimeFilter').innerHTML='<option value="">Todos</option>'+(w.regimes||[]).map(function(r){return '<option '+(state.filters.regime===r?'selected':'')+'>'+esc_(r)+'</option>';}).join('');
+    }
+    function filtered_(){
+      var f=state.filters,q=String(f.search||'').trim().toLocaleLowerCase('pt-BR');
+      return (state.workspace&&state.workspace.records||[]).filter(function(r){
+        if(f.year&&String(r.year)!==f.year)return false;if(f.prize&&r.prizeId!==f.prize)return false;if(f.status&&r.status!==f.status)return false;if(f.regime&&r.regime!==f.regime)return false;
+        return !q||[r.name,r.ra,r.course,r.prize,r.administrativeReference].join(' ').toLocaleLowerCase('pt-BR').indexOf(q)>=0;
+      });
+    }
+    function renderTable_(){
+      var rows=filtered_(),host=document.getElementById('manTableHost');document.getElementById('manMeta').textContent=rows.length+' registro(s) na consulta atual';
+      if(!rows.length){host.innerHTML='<div class="manual-empty">Nenhuma premiação manual encontrada para os filtros atuais.</div>';return;}
+      host.innerHTML='<table class="manual-record-table"><thead><tr><th>Estudante</th><th>Prêmio extraordinário</th><th>Contexto</th><th>Situação</th><th>Auditoria</th><th></th></tr></thead><tbody>'+rows.map(function(r){
+        var context=(r.regime||'')+' · '+r.year+(r.regime==='SEMESTRAL'&&r.semester?' / '+r.semester+'º sem.':'');
+        return '<tr data-man-id="'+UiUtil.escapeAttr(r.id)+'"><td><strong>'+esc_(r.name)+'</strong><small>'+esc_(r.ra+(r.course?' · '+r.course:''))+'</small></td><td><strong>'+esc_(r.prize)+'</strong><small>'+esc_(r.administrativeReference||'Sem referência administrativa')+'</small></td><td>'+esc_(context)+'</td><td><span class="manual-status '+statusClass_(r.status)+'">'+esc_(r.status)+'</span></td><td><strong>'+esc_(r.registeredByName||r.registeredByEmail||'—')+'</strong><small>'+esc_(fmtDate_(r.registeredAt))+'</small></td><td><button type="button" class="manual-edit-btn" title="Abrir registro"><i class="bi bi-pencil"></i></button></td></tr>';
+      }).join('')+'</tbody></table>';
+      host.querySelectorAll('[data-man-id]').forEach(function(row){row.addEventListener('click',function(e){openDrawer_(row.dataset.manId);});});
+    }
+
+    function selected_(){return (state.workspace&&state.workspace.records||[]).find(function(r){return r.id===state.selectedId;})||null;}
+    function fillSelect_(id,values,selected,placeholder){document.getElementById(id).innerHTML=(placeholder?'<option value="">'+esc_(placeholder)+'</option>':'')+(values||[]).map(function(v){var value=v.id||v, label=v.description||v;return '<option value="'+UiUtil.escapeAttr(value)+'" '+(String(value)===String(selected||'')?'selected':'')+'>'+esc_(label)+'</option>';}).join('');}
+    function setIdentityReadonly_(readonly){['manName','manCourse','manCoursePeriod','manClassGroup'].forEach(function(id){document.getElementById(id).readOnly=readonly;});}
+    function setFormLocked_(locked){
+      ['manRa','manLookup','manManualStudent','manName','manCourse','manCoursePeriod','manClassGroup','manPrize','manYear','manRegime','manSemester','manJustification','manReference'].forEach(function(id){var el=document.getElementById(id);if(el)el.disabled=locked;});
+    }
+    function openDrawer_(id){
+      state.selectedId=id||'';var r=selected_(),w=state.workspace||{},year=(new Date()).getFullYear();
+      document.getElementById('manFormError').hidden=true;document.getElementById('manFound').hidden=true;document.getElementById('manManualStudent').checked=false;
+      fillSelect_('manPrize',w.prizes||[],r&&r.prizeId,'Selecione o prêmio extraordinário');
+      fillSelect_('manRegime',w.regimes||[],r&&r.regime,'Selecione o regime');
+      fillSelect_('manStatus',w.statuses||[],r&&r.status||'EM APURAÇÃO','');
+      document.getElementById('manRa').value=r?r.ra:'';document.getElementById('manName').value=r?r.name:'';document.getElementById('manCourse').value=r?r.course:'';document.getElementById('manCoursePeriod').value=r?r.coursePeriod:'';document.getElementById('manClassGroup').value=r?r.classGroup:'';document.getElementById('manYear').value=r?r.year:year;document.getElementById('manSemester').value=r&&r.semester?String(r.semester):'';document.getElementById('manJustification').value=r?r.justification:'';document.getElementById('manReference').value=r?r.administrativeReference:'';
+      document.getElementById('manDrawerTitle').textContent=r?'Editar premiação manual':'Novo premiado';document.getElementById('manDrawerSubtitle').textContent=r?(r.id+' · origem CADASTRO_MANUAL'):'Premiação extraordinária · origem CADASTRO_MANUAL';
+      document.getElementById('manDelete').hidden=!r||r.status!=='EM APURAÇÃO';
+      var locked=Boolean(r&&r.status!=='EM APURAÇÃO');setFormLocked_(locked);document.getElementById('manStatus').disabled=Boolean(r&&r.status==='HOMOLOGADO');document.getElementById('manSave').disabled=Boolean(r&&r.status==='HOMOLOGADO');setIdentityReadonly_(true);
+      if(r&&r.status==='PUBLICADO')document.getElementById('manStatus').disabled=false;
+      updateSemester_();renderAudit_(r);
+      document.getElementById('manBackdrop').hidden=false;document.getElementById('manDrawer').classList.add('is-open');document.getElementById('manDrawer').setAttribute('aria-hidden','false');
+    }
+    function closeDrawer_(){document.getElementById('manDrawer').classList.remove('is-open');document.getElementById('manDrawer').setAttribute('aria-hidden','true');setTimeout(function(){document.getElementById('manBackdrop').hidden=true;},120);state.selectedId='';}
+    function renderAudit_(r){document.getElementById('manAudit').innerHTML='<div><small>Origem</small><strong>CADASTRO_MANUAL</strong></div><div><small>ID</small><strong>'+esc_(r?r.id:'Gerado ao salvar')+'</strong></div><div><small>Registrado por</small><strong>'+esc_(r?(r.registeredByName||r.registeredByEmail):'Usuário autenticado')+'</strong></div><div><small>Registrado em</small><strong>'+esc_(r?fmtDate_(r.registeredAt):'Ao salvar')+'</strong></div><div><small>Publicado em</small><strong>'+esc_(r?fmtDate_(r.publishedAt):'—')+'</strong></div><div><small>Homologado em</small><strong>'+esc_(r?fmtDate_(r.approvedAt):'—')+'</strong></div>';}
+    function updateManualStudent_(){var enabled=document.getElementById('manManualStudent').checked;setIdentityReadonly_(!enabled);if(enabled)document.getElementById('manFound').hidden=true;}
+    function updateSemester_(){var sem=document.getElementById('manRegime').value==='SEMESTRAL';document.getElementById('manSemesterWrap').hidden=!sem;if(!sem)document.getElementById('manSemester').value='';}
+    async function lookupStudent_(){
+      var ra=String(document.getElementById('manRa').value||'').trim();if(!ra){showFormError_('Informe o RA antes de localizar.');return;}
+      try{document.getElementById('manLookup').disabled=true;var result=await ApiClient.authenticatedCall('lookupManualAwardeeStudent',ra);if(result&&result.found){var s=result.student||{};document.getElementById('manName').value=s.name||'';document.getElementById('manCourse').value=s.course||'';document.getElementById('manCoursePeriod').value=s.coursePeriod||'';document.getElementById('manClassGroup').value=s.classGroup||'';document.getElementById('manFound').innerHTML='<strong>Estudante localizado.</strong> Dados preenchidos a partir de '+esc_(s.source||'base acadêmica')+'.';document.getElementById('manFound').hidden=false;document.getElementById('manManualStudent').checked=false;setIdentityReadonly_(true);hideFormError_();}else{showFormError_('RA não localizado. Se o cadastro for realmente excepcional, marque a opção para preenchimento manual.');}}
+      catch(error){showFormError_(UiUtil.actionableErrorMessage(error,'Não foi possível localizar o estudante.'));}
+      finally{document.getElementById('manLookup').disabled=false;}
+    }
+    function values_(){return{id:state.selectedId||'',ra:String(document.getElementById('manRa').value||'').trim(),name:String(document.getElementById('manName').value||'').trim(),course:String(document.getElementById('manCourse').value||'').trim(),coursePeriod:String(document.getElementById('manCoursePeriod').value||'').trim(),classGroup:String(document.getElementById('manClassGroup').value||'').trim(),prizeId:document.getElementById('manPrize').value,year:document.getElementById('manYear').value,regime:document.getElementById('manRegime').value,semester:document.getElementById('manSemester').value,status:document.getElementById('manStatus').value,justification:String(document.getElementById('manJustification').value||'').trim(),administrativeReference:String(document.getElementById('manReference').value||'').trim()};}
+    async function save_(){var v=values_();if(!v.ra||!v.name||!v.prizeId||!v.year||!v.regime||!v.justification||(v.regime==='SEMESTRAL'&&!v.semester)){showFormError_('Preencha RA, nome, prêmio, ano, regime, semestre quando aplicável e justificativa.');return;}try{document.getElementById('manSave').disabled=true;state.workspace=await ApiClient.authenticatedCall('saveManualAwardee',v);closeDrawer_();renderAll_();showMessage_('success','Premiação extraordinária salva com rastreabilidade.');}catch(error){showFormError_(UiUtil.actionableErrorMessage(error,'Não foi possível salvar a premiação.'));}finally{document.getElementById('manSave').disabled=false;}}
+    async function remove_(){var r=selected_();if(!r)return;if(!confirm('Excluir o registro manual EM APURAÇÃO de '+r.name+'?'))return;try{state.workspace=await ApiClient.authenticatedCall('deleteManualAwardee',r.id);closeDrawer_();renderAll_();showMessage_('success','Registro manual excluído.');}catch(error){showFormError_(UiUtil.actionableErrorMessage(error,'Não foi possível excluir o registro.'));}}
+    function clearFilters_(){state.filters={search:'',year:'',prize:'',status:'',regime:''};document.getElementById('manSearch').value='';renderFilterOptions_();renderTable_();}
+    function showFormError_(text){var e=document.getElementById('manFormError');e.textContent=text;e.hidden=false;}
+    function hideFormError_(){document.getElementById('manFormError').hidden=true;}
+    function showMessage_(type,text){var e=document.getElementById('manMessage');e.className='ap-inline-message is-'+type;e.textContent=text;e.hidden=false;}
+    function hideMessage_(){document.getElementById('manMessage').hidden=true;}
+    function extraordinaryPrizes_(){return state.latestPrizes.filter(function(p){return p.status==='ATIVA'&&p.category==='EXTRAORDINÁRIO';});}
+    function refreshPrizes(prizes){
+      state.latestPrizes=prizes||[];state.prizeRevision++;
+      if(!state.workspace)return;
+      state.workspace.prizes=extraordinaryPrizes_();
+      renderFilterOptions_();
+      var select=document.getElementById('manPrize'),selected=select.value;
+      fillSelect_('manPrize',state.workspace.prizes,selected,'Selecione o prêmio extraordinário');
+    }
+    return Object.freeze({init:init,open:open,refreshPrizes:refreshPrizes});
+  })();
+</script>

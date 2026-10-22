@@ -1,0 +1,953 @@
+<script>
+  var ApurationWorkspaceController = (function () {
+    var state = {
+      bootstrap: null,
+      workspace: null,
+      loading: false,
+      pending: [],
+      selectedRa: '',
+      sort: { field: '', direction: '' },
+      pendingContext: null,
+      guardMode: '',
+      transitionArmed: '',
+      transitionArmedUntil: 0,
+      occurrenceWithoutEndConfirmed: false,
+      refreshQueued: false,
+      studentRequest: 0,
+      prizeRevision: 0,
+      latestPrizes: [],
+      transitionJob: null,
+      transitionRunning: false,
+      progressDismissTimer: null,
+      dismissedProgressJobId: ''
+    };
+
+    function init() {
+      document.getElementById('btnToggleSidebar').addEventListener('click', function () {
+        document.getElementById('authenticatedShell').classList.toggle('sidebar-collapsed');
+      });
+      document.getElementById('menuApuration').addEventListener('click', function () {
+        document.getElementById('awardeeWorkspace').hidden = true;
+        document.getElementById('manualAwardeeWorkspace').hidden = true;
+        document.getElementById('awardeeReportWorkspace').hidden = true;
+        document.getElementById('publicPortalConfigWorkspace').hidden = true;
+        document.getElementById('mainContent').hidden = false;
+        setActiveMenu_('menuApuration', 'Mesa de apuração');
+        bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('sidePanel')).hide();
+      });
+      document.getElementById('apDataset').addEventListener('change', onDataSetChange_);
+      document.getElementById('apYear').addEventListener('change', onYearChange_);
+      document.getElementById('apReferenceDate').addEventListener('change', onWorkspaceOptionChange_);
+      document.getElementById('apCriteriaPackage').addEventListener('change', onWorkspaceOptionChange_);
+      document.getElementById('apSearch').addEventListener('input', renderTable_);
+      ['apMetric','apGroup','apPeriod','apExtra'].forEach(function (id) {
+        document.getElementById(id).addEventListener('change', function () {
+          if (id === 'apMetric') state.sort = { field: '', direction: '' };
+          renderTable_();
+        });
+      });
+      document.getElementById('apClearFilters').addEventListener('click', clearFilters_);
+      document.getElementById('apReviewPending').addEventListener('click', function () {
+        var panel = document.getElementById('apPendingPanel');
+        panel.hidden = !panel.hidden;
+      });
+      document.getElementById('apClosePending').addEventListener('click', function () { document.getElementById('apPendingPanel').hidden = true; });
+      document.getElementById('apSavePending').addEventListener('click', savePending_);
+      document.getElementById('apStudentClose').addEventListener('click', closeStudent_);
+      document.getElementById('apStudentBackdrop').addEventListener('click', closeStudent_);
+      document.querySelectorAll('[data-ap-tab]').forEach(function (button) {
+        button.addEventListener('click', function () { selectStudentTab_(button.dataset.apTab); });
+      });
+      document.getElementById('apGuardSave').addEventListener('click', saveFromGuard_);
+      document.getElementById('apGuardDiscard').addEventListener('click', discardFromGuard_);
+      document.getElementById('apResumeTransition').addEventListener('click', function () {
+        if (state.pending.length) { showMessage_('warning', 'Salve ou descarte as decisões pendentes antes de retomar o processamento.'); return; }
+        if (state.transitionJob) transition_(state.transitionJob.nextStatus, state.transitionJob);
+      });
+      document.getElementById('apCloseTransitionProgress').addEventListener('click', dismissTransitionProgress_);
+      window.addEventListener('beforeunload', function (event) {
+        if (!state.pending.length && !state.transitionRunning) return;
+        event.preventDefault();
+        event.returnValue = '';
+      });
+      document.querySelectorAll('.sidebar-item').forEach(function (button) {
+        if (button.id === 'menuApuration') return;
+        button.addEventListener('click', function () { setActiveMenu_(button.id, button.textContent.trim()); });
+      });
+    }
+
+    function setActiveMenu_(id, title) {
+      document.querySelectorAll('.sidebar-item').forEach(function (b) { b.classList.toggle('is-active', b.id === id); });
+      document.getElementById('activeSectionTitle').textContent = title || 'Mesa de apuração';
+    }
+
+    function hasPendingDecisions() { return state.pending.length > 0; }
+
+    function showMessage_(type, message) {
+      var box = document.getElementById('apMessage');
+      if (!message) { box.hidden = true; box.textContent = ''; box.className = 'ap-inline-message'; return; }
+      box.hidden = false;
+      box.className = 'ap-inline-message' + (type ? ' is-' + type : '');
+      box.textContent = message;
+    }
+
+    async function load() {
+      if (!AppModel.state.permissions || !AppModel.state.permissions.canManageRecords) {
+        document.getElementById('mainContent').innerHTML = '<div class="ap-loading">Seu perfil não possui permissão para utilizar a Mesa de Apuração.</div>';
+        return;
+      }
+      document.getElementById('awardeeWorkspace').hidden = true;
+      document.getElementById('manualAwardeeWorkspace').hidden = true;
+      document.getElementById('awardeeReportWorkspace').hidden = true;
+        document.getElementById('publicPortalConfigWorkspace').hidden = true;
+      document.getElementById('mainContent').hidden = false;
+      setActiveMenu_('menuApuration', 'Mesa de apuração');
+      state.loading = true;
+      setBusy_(true, 'Carregando conjuntos acadêmicos…');
+      try {
+        state.bootstrap = await ApiClient.authenticatedCall('getApurationBootstrap');
+        renderBootstrap_();
+        if (state.transitionJob && !state.transitionJob.done) {
+          state.workspace = null;
+          renderEmpty_('Há um processamento em lotes pendente. Clique em Retomar processamento para concluir a operação.');
+          return;
+        }
+        var first = (state.bootstrap.dataSets || [])[0];
+        if (!first) {
+          state.workspace = null;
+          renderEmpty_('Nenhum conjunto de dados temporários está disponível. Importe dados em Gerenciar Dados para iniciar uma apuração.');
+          return;
+        }
+        document.getElementById('apDataset').value = first.key;
+        document.getElementById('apYear').value = String(first.year);
+        await loadWorkspace_({ dataType: first.dataType, year: first.year, semester: first.semester }, true);
+      } catch (error) {
+        showMessage_('error', UiUtil.actionableErrorMessage(error, 'Não foi possível carregar a Mesa de Apuração.'));
+        renderEmpty_('Falha ao carregar os dados da apuração.');
+      } finally {
+        state.loading = false;
+        setBusy_(false);
+        runQueuedRefresh_();
+      }
+    }
+
+    function renderBootstrap_() {
+      if (!state.transitionRunning) {
+        state.transitionJob = state.bootstrap && state.bootstrap.transitionJob || null;
+        renderTransitionProgress_(state.transitionJob, false);
+      }
+      var dataSets = state.bootstrap && state.bootstrap.dataSets || [];
+      var years = [];
+      dataSets.forEach(function (d) { if (years.indexOf(String(d.year)) < 0) years.push(String(d.year)); });
+      years.sort(function (a,b) { return Number(b)-Number(a); });
+      document.getElementById('apYear').innerHTML = years.map(function (y) { return '<option value="' + UiUtil.escapeAttr(y) + '">' + UiUtil.escapeHtml(y) + '</option>'; }).join('');
+      renderDataSetOptions_(years[0] || '');
+    }
+
+    function renderDataSetOptions_(year) {
+      var dataSets = state.bootstrap && state.bootstrap.dataSets || [];
+      var filtered = dataSets.filter(function (d) { return !year || String(d.year) === String(year); });
+      document.getElementById('apDataset').innerHTML = filtered.map(function (d) {
+        return '<option value="' + UiUtil.escapeAttr(d.key) + '">' + UiUtil.escapeHtml(d.label) + ' · ' + Number(d.raCount || 0) + ' RA(s)</option>';
+      }).join('');
+    }
+
+    function dataSetByKey_(key) {
+      return state.bootstrap && (state.bootstrap.dataSets || []).find(function (d) { return d.key === key; }) || null;
+    }
+
+    function currentContext_() {
+      if (!state.workspace) return null;
+      return {
+        dataType: state.workspace.context.dataType,
+        regime: state.workspace.context.regime,
+        year: state.workspace.context.year,
+        semester: state.workspace.context.semester,
+        referenceDate: state.workspace.referenceDate,
+        packageId: state.workspace.criteria && state.workspace.criteria.selectedPackageId || ''
+      };
+    }
+
+    function requestContextChange_(context) {
+      if (!state.pending.length) { loadWorkspace_(context); return; }
+      state.pendingContext = context;
+      state.guardMode = 'context';
+      showGuard_('Decisões não salvas', 'Salve ou descarte as decisões pendentes antes de alterar o conjunto, a data de referência ou o pacote de critérios.');
+    }
+
+    function onDataSetChange_(event) {
+      var d = dataSetByKey_(event.target.value);
+      if (!d) return;
+      if (state.pending.length) {
+        var old = state.workspace && state.workspace.dataSet ? state.workspace.dataSet.key : '';
+        event.target.value = old;
+      }
+      requestContextChange_({ dataType: d.dataType, year: d.year, semester: d.semester });
+    }
+
+    function onYearChange_(event) {
+      var year = event.target.value;
+      var oldYear = state.workspace ? String(state.workspace.context.year) : '';
+      renderDataSetOptions_(year);
+      var firstKey = document.getElementById('apDataset').value;
+      var d = dataSetByKey_(firstKey);
+      if (!d) return;
+      if (state.pending.length) {
+        event.target.value = oldYear;
+        renderDataSetOptions_(oldYear);
+        document.getElementById('apDataset').value = state.workspace.dataSet.key;
+      }
+      requestContextChange_({ dataType: d.dataType, year: d.year, semester: d.semester });
+    }
+
+    function onWorkspaceOptionChange_() {
+      if (!state.workspace) return;
+      var context = currentContext_();
+      context.referenceDate = document.getElementById('apReferenceDate').value;
+      context.packageId = document.getElementById('apCriteriaPackage').value;
+      if (state.pending.length) {
+        document.getElementById('apReferenceDate').value = state.workspace.referenceDate || '';
+        document.getElementById('apCriteriaPackage').value = state.workspace.criteria.selectedPackageId || '';
+      }
+      requestContextChange_(context);
+    }
+
+    async function loadWorkspace_(context, deferRefresh) {
+      if (!context) return;
+      closeStudent_();
+      state.loading = true;
+      setBusy_(true, 'Processando a base e calculando os indicadores…');
+      showMessage_('', '');
+      try {
+        var prizeRevision = state.prizeRevision;
+        var workspace = await ApiClient.authenticatedCall('getApurationWorkspace', context);
+        if (prizeRevision !== state.prizeRevision) workspace.prizes = regularPrizes_();
+        state.workspace = workspace;
+        state.sort = { field: '', direction: '' };
+        state.selectedRa = '';
+        document.getElementById('apDataset').value = workspace.dataSet.key;
+        document.getElementById('apYear').value = String(workspace.context.year);
+        renderWorkspace_();
+      } catch (error) {
+        showMessage_('error', UiUtil.actionableErrorMessage(error));
+      } finally {
+        state.loading = false;
+        setBusy_(false);
+        if (!deferRefresh) runQueuedRefresh_();
+      }
+    }
+
+    function setBusy_(busy, message) {
+      var processing = state.transitionJob && !state.transitionJob.done;
+      ['apDataset','apYear','apReferenceDate','apCriteriaPackage','apSavePending','apTransition','apStagePrize','apStageOccurrence'].forEach(function (id) {
+        var el = document.getElementById(id); if (el) el.disabled = Boolean(busy || processing);
+      });
+      if (!busy && !processing && state.workspace) {
+        renderPackageOptions_();
+        ['apStagePrize','apStageOccurrence'].forEach(function (id) {
+          var el = document.getElementById(id); if (el) el.disabled = lifecycleStatus_() !== 'EM APURAÇÃO';
+        });
+      }
+      document.getElementById('apResumeTransition').disabled = Boolean(busy);
+      if (state.transitionJob && !state.transitionJob.done) document.getElementById('apTransition').disabled = true;
+      if (busy && message) document.getElementById('apTableHost').innerHTML = '<div class="ap-loading"><span class="spinner-border spinner-border-sm me-2"></span>' + UiUtil.escapeHtml(message) + '</div>';
+    }
+
+    function renderEmpty_(message) {
+      document.getElementById('apRows').textContent = '0';
+      document.getElementById('apRas').textContent = '0';
+      document.getElementById('apPrizeCount').textContent = '0';
+      document.getElementById('apOccurrenceCount').textContent = '0';
+      document.getElementById('apTableHost').innerHTML = '<div class="ap-empty">' + UiUtil.escapeHtml(message) + '</div>';
+      document.getElementById('apTableMeta').textContent = '';
+      document.getElementById('apTableFooter').textContent = '';
+      document.getElementById('apStateStepper').innerHTML = '';
+      document.getElementById('apStateCaption').textContent = '';
+      document.getElementById('apTransition').hidden = true;
+      renderPending_();
+    }
+
+    function renderWorkspace_() {
+      var w = state.workspace;
+      if (!w) return;
+      document.getElementById('apReferenceDate').value = w.referenceDate || '';
+      renderPackageOptions_();
+      renderFilterOptions_();
+      renderTop_();
+      renderTable_();
+      renderPending_();
+    }
+
+    function renderPackageOptions_() {
+      var w = state.workspace;
+      var select = document.getElementById('apCriteriaPackage');
+      var packages = w.criteria && w.criteria.packages || [];
+      var selectedId = w.criteria && w.criteria.selectedPackageId || '';
+      if (w.context.regime === 'ANUAL') {
+        select.innerHTML = '<option value="">Estratégia nativa — média trimestral</option>';
+        select.value = '';
+        select.disabled = true;
+        return;
+      }
+      if (w.context.regime === 'SEMESTRAL') {
+        select.innerHTML = packages.map(function (p) {
+          return '<option value="' + UiUtil.escapeAttr(p.id) + '">' + UiUtil.escapeHtml(p.description) + '</option>';
+        }).join('');
+        select.value = selectedId;
+        select.disabled = true;
+        return;
+      }
+      select.innerHTML = '<option value="">Sem pacote ativo</option>' + packages.map(function (p) {
+        return '<option value="' + UiUtil.escapeAttr(p.id) + '">' + UiUtil.escapeHtml(p.description) + '</option>';
+      }).join('');
+      select.value = selectedId;
+      select.disabled = state.loading || packages.length === 0;
+    }
+
+    function unique_(values) {
+      var map = {}; return values.filter(function (v) { var key = String(v === null || v === undefined ? '' : v); if (!key || map[key]) return false; map[key] = true; return true; });
+    }
+
+    function metricOptions_() {
+      var r = state.workspace.context.regime;
+      if (r === 'ANUAL') return [
+        ['trimester1Average','Média 1º trimestre'],['trimester2Average','Média 2º trimestre'],['trimester3Average','Média 3º trimestre'],['frequency','Frequência global (%)'],['subjectCount','Número de disciplinas']
+      ];
+      if (r === 'SEMESTRAL') return [
+        ['average','Média das notas'],['semestersCompleted','Semestres cursados'],['expectedDisciplines','Disciplinas previstas'],['takenDisciplines','Disciplinas cursadas'],['minimum50Plus1','Mínimo 50% + 1'],['approvedDisciplines','Disciplinas aprovadas'],['failures','Reprovações'],['gradeSum','Somatório das notas']
+      ];
+      return [['average','Média das notas'],['failures','Reprovações'],['subjectCount','Número de disciplinas']];
+    }
+
+    function renderFilterOptions_() {
+      var w = state.workspace, students = w.students || [], regime = w.context.regime;
+      var metric = document.getElementById('apMetric');
+      metric.innerHTML = metricOptions_().map(function (m) { return '<option value="' + m[0] + '">' + UiUtil.escapeHtml(m[1]) + '</option>'; }).join('');
+      var group = document.getElementById('apGroup');
+      var groups = regime === 'ANUAL' ? [['','Nenhum'],['course','Curso'],['coursePeriod','Período'],['classGroup','Turma']] :
+        (regime === 'CENID' ? [['','Nenhum'],['language','Idioma'],['movement','Movimento'],['coursePeriod','Período']] : [['','Nenhum'],['course','Curso'],['coursePeriod','Período'],['semestersCompleted','Semestres cursados'],['movement','Movimento'],['criteriaLabel','Atende aos critérios']]);
+      group.innerHTML = groups.map(function (g) { return '<option value="' + g[0] + '">' + UiUtil.escapeHtml(g[1]) + '</option>'; }).join('');
+      group.value = regime === 'ANUAL' ? 'classGroup' : (regime === 'CENID' ? 'language' : 'semestersCompleted');
+      fillSelect_(document.getElementById('apPeriod'), unique_(students.map(function (s) { return s.coursePeriod; })).sort(function(a,b){return Number(a)-Number(b);}), 'Todos');
+      var extra = document.getElementById('apExtra');
+      extra.dataset.field = regime === 'ANUAL' ? 'classGroup' : (regime === 'CENID' ? 'language' : 'movement');
+      fillSelect_(extra, unique_(students.map(function (s) { return s[extra.dataset.field]; })), regime === 'ANUAL' ? 'Todas as turmas' : (regime === 'CENID' ? 'Todos os idiomas' : 'Todos os movimentos'));
+    }
+
+    function fillSelect_(select, values, first) {
+      select.innerHTML = '<option value="">' + UiUtil.escapeHtml(first || 'Todos') + '</option>' + values.map(function (v) { return '<option value="' + UiUtil.escapeAttr(v) + '">' + UiUtil.escapeHtml(v) + '</option>'; }).join('');
+    }
+
+    function lifecycleStatus_() { return state.workspace && state.workspace.lifecycle ? state.workspace.lifecycle.status : 'EM APURAÇÃO'; }
+
+    function renderTop_() {
+      var w = state.workspace, lifecycle = w.lifecycle || {};
+      document.getElementById('apRows').textContent = Number(w.dataSet.rowCount || 0).toLocaleString('pt-BR');
+      document.getElementById('apRas').textContent = Number(w.dataSet.raCount || 0).toLocaleString('pt-BR');
+      document.getElementById('apPrizeCount').textContent = Number(lifecycle.awardeeCount || 0);
+      document.getElementById('apOccurrenceCount').textContent = Number(lifecycle.occurrenceCount || 0);
+      var status = lifecycle.status || 'EM APURAÇÃO';
+      var steps = [
+        { status:'EM APURAÇÃO', label:'EM APURAÇÃO', cls:'ap-under' },
+        { status:'PUBLICADO', label:'PUBLICADO', cls:'ap-published' },
+        { status:'HOMOLOGADO', label:'HOMOLOGADO', cls:'ap-approved' }
+      ];
+      document.getElementById('apStateStepper').innerHTML = steps.map(function (step,index) {
+        return (index ? '<span class="ap-step-link"></span>' : '') + '<span class="ap-step ' + (status === step.status ? 'is-current ' + step.cls : '') + '"><i class="bi bi-circle-fill"></i>' + step.label + '</span>';
+      }).join('');
+      var transition = document.getElementById('apTransition');
+      if (status === 'EM APURAÇÃO') {
+        transition.hidden = false; transition.textContent = 'Publicar resultado'; transition.className = 'ap-transition'; transition.dataset.next = 'PUBLICADO';
+        document.getElementById('apStateCaption').textContent = 'Resultado em construção: registros podem ser incluídos ou revertidos.';
+      } else if (status === 'PUBLICADO') {
+        transition.hidden = false; transition.textContent = 'Homologar resultado'; transition.className = 'ap-transition is-homologate'; transition.dataset.next = 'HOMOLOGADO';
+        document.getElementById('apStateCaption').textContent = 'Resultado publicado: novos registros estão bloqueados. A homologação descartará a base temporária.';
+      } else if (status === 'HOMOLOGADO') {
+        transition.hidden = !Number(w.dataSet.rowCount);
+        transition.textContent = 'Concluir homologação'; transition.className = 'ap-transition is-homologate'; transition.dataset.next = 'HOMOLOGADO';
+        document.getElementById('apStateCaption').textContent = Number(w.dataSet.rowCount)
+          ? 'Registros homologados. Conclua a homologação para descartar a base temporária restante.'
+          : 'Resultado homologado: apenas os registros permanentes permanecem.';
+      } else {
+        transition.hidden = true;
+        document.getElementById('apStateCaption').textContent = 'Há estados divergentes nos registros permanentes. Regularize-os antes de continuar.';
+      }
+      transition.onclick = function () { requestTransition_(transition.dataset.next); };
+      var selected = w.criteria && w.criteria.selectedPackage;
+      document.getElementById('apCriteriaSummary').textContent = selected ? 'Critérios: ' + selected.description : 'Sem pacote de critérios aplicado';
+    }
+
+    function criteriaLabel_(student) {
+      if (!student.criteriaActive) return 'Sem critérios';
+      return student.criteriaPassed ? 'Atende' : 'Não atende';
+    }
+
+    function filteredStudents_() {
+      var w = state.workspace, students = (w.students || []).map(function (s) {
+        var copy = Object.assign({}, s); copy.criteriaLabel = criteriaLabel_(s); return copy;
+      });
+      var q = String(document.getElementById('apSearch').value || '').trim().toLocaleLowerCase('pt-BR');
+      var period = document.getElementById('apPeriod').value;
+      var extra = document.getElementById('apExtra');
+      var extraValue = extra.value, extraField = extra.dataset.field;
+      var regime = w.context.regime;
+      students = students.filter(function (s) {
+        var hay = (s.name + ' ' + s.ra + ' ' + s.course).toLocaleLowerCase('pt-BR');
+        var periodValue = s.coursePeriod;
+        return (!q || hay.indexOf(q) >= 0) && (!period || String(periodValue) === String(period)) && (!extraValue || String(s[extraField]) === String(extraValue));
+      });
+      var metric = document.getElementById('apMetric').value;
+      var field = state.sort.field || metric;
+      var direction = state.sort.direction || 'desc';
+      students.sort(function (a,b) {
+        var av = a[field], bv = b[field];
+        if (typeof av === 'number' || typeof bv === 'number' || (!isNaN(Number(av)) && !isNaN(Number(bv)) && av !== '' && bv !== '')) {
+          var an = av === null || av === undefined || av === '' ? -Infinity : Number(av);
+          var bn = bv === null || bv === undefined || bv === '' ? -Infinity : Number(bv);
+          return (an-bn) * (direction === 'asc' ? 1 : -1);
+        }
+        return String(av || '').localeCompare(String(bv || ''), 'pt-BR', { sensitivity:'base' }) * (direction === 'asc' ? 1 : -1);
+      });
+      return students;
+    }
+
+    function metricLabel_(key) {
+      var found = metricOptions_().find(function (m) { return m[0] === key; }); return found ? found[1] : key;
+    }
+
+    function formatNumber_(value, digits) {
+      if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) return '—';
+      return Number(value).toLocaleString('pt-BR', { minimumFractionDigits: digits || 0, maximumFractionDigits: digits === undefined ? 2 : digits });
+    }
+
+    function sortMark_(field) { return state.sort.field === field ? '<span class="ap-sort-mark">' + (state.sort.direction === 'asc' ? '▲' : '▼') + '</span>' : ''; }
+
+    function studentStatusHtml_(s) {
+      var cls = s.status === 'PREMIADO' ? 'ap-awarded' : (s.status === 'INELEGÍVEL' ? 'ap-ineligible' : 'ap-neutral');
+      var pending = state.pending.filter(function (p) { return p.ra === s.ra; }).length;
+      return '<span class="ap-status ' + cls + '">' + UiUtil.escapeHtml(s.status || 'EM APURAÇÃO') + '</span>' +
+        (pending ? '<small>' + pending + ' decisão(ões) no lote — não salva(s)</small>' : '');
+    }
+
+    function criteriaHtml_(s) {
+      if (!s.criteriaActive) return '<span class="ap-criteria-result is-none">Sem critérios</span>';
+      return '<span class="ap-criteria-result ' + (s.criteriaPassed ? 'is-pass' : 'is-fail') + '">' + (s.criteriaPassed ? 'Atende ' : 'Não atende ') + Number(s.criteriaPassedCount || 0) + '/' + Number(s.criteriaRuleCount || 0) + '</span>';
+    }
+
+    function renderTable_() {
+      if (!state.workspace) return;
+      var students = filteredStudents_(), regime = state.workspace.context.regime, metric = document.getElementById('apMetric').value, group = document.getElementById('apGroup').value;
+      document.getElementById('apTableMeta').textContent = students.length + ' estudante(s) após os filtros · clique nos títulos para ordenar';
+      var grouped = { '__all': students };
+      if (group) {
+        grouped = {};
+        students.forEach(function (s) { var key = String(s[group] === null || s[group] === undefined || s[group] === '' ? 'Sem valor' : s[group]); (grouped[key] || (grouped[key] = [])).push(s); });
+      }
+      var html = '';
+      Object.keys(grouped).forEach(function (groupName) {
+        var rows = grouped[groupName];
+        if (group) html += '<div class="ap-group-label">' + UiUtil.escapeHtml(groupName) + '</div>';
+        if (regime === 'SEMESTRAL') html += renderSemestralTable_(rows);
+        else html += renderGenericTable_(rows, metric, regime);
+      });
+      document.getElementById('apTableHost').innerHTML = html || '<div class="ap-empty">Nenhum estudante encontrado com os filtros atuais.</div>';
+      document.getElementById('apTableFooter').textContent = regime === 'SEMESTRAL'
+        ? 'Indicadores calculados com os dados temporários e a tabela MATRIZES. Os critérios são parametrizados e não determinam automaticamente quem será premiado.'
+        : 'A mesa organiza os dados para análise; a decisão de premiação pertence ao usuário.';
+      document.querySelectorAll('[data-ap-sort]').forEach(function (th) { th.addEventListener('click', function () { sortBy_(th.dataset.apSort); }); });
+      document.querySelectorAll('[data-ap-student]').forEach(function (button) { button.addEventListener('click', function () { openStudent_(button.dataset.apStudent); }); });
+    }
+
+    function renderSemestralTable_(rows) {
+      var head = [
+        ['name','Estudante'],['coursePeriod','Período'],['semestersCompleted','Semestres'],['expectedDisciplines','Previstas'],['takenDisciplines','Cursadas'],['minimum50Plus1','Mín. 50%+1'],['approvedDisciplines','Aprovadas'],['failures','Reprov.'],['average','Média'],['criteriaLabel','Critérios']
+      ];
+      var html = '<table class="ap-table is-semestral"><thead><tr><th>#</th>' + head.map(function (h) { return '<th class="ap-sortable" data-ap-sort="' + h[0] + '">' + h[1] + sortMark_(h[0]) + '</th>'; }).join('') + '<th class="ap-sortable" data-ap-sort="status">Situação' + sortMark_('status') + '</th><th class="ap-table-actions">Ações</th></tr></thead><tbody>';
+      rows.forEach(function (s,index) {
+        html += '<tr><td class="ap-rank">' + (index+1) + '</td>' +
+          '<td class="ap-person"><strong>' + UiUtil.escapeHtml(s.name) + '</strong><small>' + UiUtil.escapeHtml(s.ra) + ' · ' + UiUtil.escapeHtml(s.course) + '</small></td>' +
+          '<td class="ap-number">' + formatNumber_(s.coursePeriod,0) + '</td><td class="ap-number">' + formatNumber_(s.semestersCompleted,0) + '</td><td class="ap-number">' + formatNumber_(s.expectedDisciplines,0) + '</td><td class="ap-number">' + formatNumber_(s.takenDisciplines,0) + '</td><td class="ap-number">' + formatNumber_(s.minimum50Plus1,1) + '</td><td class="ap-number">' + formatNumber_(s.approvedDisciplines,0) + '</td><td class="ap-number">' + formatNumber_(s.failures,0) + '</td><td class="ap-number">' + formatNumber_(s.average,2) + '</td><td>' + criteriaHtml_(s) + '</td><td>' + studentStatusHtml_(s) + '</td><td class="ap-table-actions"><button type="button" class="ap-analyze" data-ap-student="' + UiUtil.escapeAttr(s.ra) + '">Analisar</button></td></tr>';
+      });
+      return html + '</tbody></table>';
+    }
+
+    function renderGenericTable_(rows, metric, regime) {
+      var html = '<table class="ap-table"><thead><tr><th>#</th><th class="ap-sortable" data-ap-sort="name">Estudante' + sortMark_('name') + '</th><th>Contexto</th><th class="ap-sortable" data-ap-sort="' + metric + '">' + UiUtil.escapeHtml(metricLabel_(metric)) + sortMark_(metric) + '</th><th class="ap-sortable" data-ap-sort="subjectCount">Disciplinas' + sortMark_('subjectCount') + '</th><th class="ap-sortable" data-ap-sort="status">Situação' + sortMark_('status') + '</th><th></th></tr></thead><tbody>';
+      rows.forEach(function (s,index) {
+        var context = regime === 'ANUAL' ? 'Período ' + s.coursePeriod + ' · Turma ' + s.classGroup : (s.language || s.course) + ' · ' + (s.movement || '');
+        var value = s[metric];
+        html += '<tr><td class="ap-rank">' + (index+1) + '</td><td class="ap-person"><strong>' + UiUtil.escapeHtml(s.name) + '</strong><small>' + UiUtil.escapeHtml(s.ra) + ' · ' + UiUtil.escapeHtml(s.course) + '</small></td><td>' + UiUtil.escapeHtml(context) + '</td><td class="ap-number">' + formatNumber_(value, metric === 'subjectCount' ? 0 : 2) + (metric === 'frequency' && value !== null ? '%' : '') + '</td><td class="ap-number">' + formatNumber_(s.subjectCount,0) + '</td><td>' + studentStatusHtml_(s) + '</td><td><button class="ap-analyze" data-ap-student="' + UiUtil.escapeAttr(s.ra) + '">Analisar</button></td></tr>';
+      });
+      return html + '</tbody></table>';
+    }
+
+    function sortBy_(field) {
+      if (state.sort.field === field) state.sort.direction = state.sort.direction === 'asc' ? 'desc' : 'asc';
+      else state.sort = { field: field, direction: 'asc' };
+      renderTable_();
+    }
+
+    function clearFilters_() {
+      document.getElementById('apSearch').value = '';
+      document.getElementById('apPeriod').value = '';
+      document.getElementById('apExtra').value = '';
+      renderTable_();
+    }
+
+    function studentByRa_(ra) { return state.workspace && (state.workspace.students || []).find(function (s) { return s.ra === ra; }) || null; }
+
+    async function openStudent_(ra) {
+      var student = studentByRa_(ra); if (!student) return;
+      var request = ++state.studentRequest;
+      state.selectedRa = ra;
+      state.occurrenceWithoutEndConfirmed = false;
+      document.getElementById('apStudentName').textContent = student.name;
+      document.getElementById('apStudentSubtitle').textContent = student.ra + ' · ' + state.workspace.dataSet.label;
+      renderStudentSummary_(student);
+      renderStudentExisting_(student);
+      renderDecisionEditors_(student);
+      selectStudentTab_('academic');
+      document.getElementById('apStudentDetails').innerHTML = '<div class="ap-loading"><span class="spinner-border spinner-border-sm me-2"></span>Carregando disciplinas…</div>';
+      document.getElementById('apStudentBackdrop').hidden = false;
+      document.getElementById('apStudentDrawer').classList.add('is-open');
+      document.getElementById('apStudentDrawer').setAttribute('aria-hidden','false');
+      try {
+        var payload = currentContext_(); payload.ra = ra;
+        var details = await ApiClient.authenticatedCall('getApurationStudentDetails', payload);
+        if (request !== state.studentRequest || state.selectedRa !== ra) return;
+        renderStudentDetails_(details);
+      } catch (error) {
+        if (request !== state.studentRequest || state.selectedRa !== ra) return;
+        document.getElementById('apStudentDetails').innerHTML = '<div class="ap-empty">' + UiUtil.escapeHtml(UiUtil.actionableErrorMessage(error)) + '</div>';
+      }
+    }
+
+    function closeStudent_() {
+      state.studentRequest++;
+      document.getElementById('apStudentBackdrop').hidden = true;
+      document.getElementById('apStudentDrawer').classList.remove('is-open');
+      document.getElementById('apStudentDrawer').setAttribute('aria-hidden','true');
+    }
+
+    function selectStudentTab_(tab) {
+      document.querySelectorAll('[data-ap-tab]').forEach(function (b) { b.classList.toggle('is-active', b.dataset.apTab === tab); });
+      document.getElementById('apAcademicTab').classList.toggle('is-active', tab === 'academic');
+      document.getElementById('apDecisionTab').classList.toggle('is-active', tab === 'decision');
+    }
+
+    function renderStudentSummary_(s) {
+      var boxes = [['Curso',s.course],['Situação',s.status]];
+      if (state.workspace.context.regime === 'SEMESTRAL') boxes.push(['Período',s.coursePeriod],['Semestres cursados',s.semestersCompleted],['Previstas',s.expectedDisciplines],['Cursadas',s.takenDisciplines],['Critérios',criteriaLabel_(s)]);
+      else if (state.workspace.context.regime === 'ANUAL') boxes.push(['Período',s.coursePeriod],['Turma',s.classGroup],['Frequência',formatNumber_(s.frequency,2)+'%'],['Disciplinas',s.subjectCount]);
+      else boxes.push(['Idioma',s.language],['Movimento',s.movement],['Média',formatNumber_(s.average,2)],['Disciplinas',s.subjectCount]);
+      document.getElementById('apStudentSummary').innerHTML = boxes.map(function (b) { return '<div class="ap-summary-box"><small>' + UiUtil.escapeHtml(b[0]) + '</small><strong>' + UiUtil.escapeHtml(b[1] === null || b[1] === undefined ? '—' : b[1]) + '</strong></div>'; }).join('');
+      renderStudentCriteria_(s);
+    }
+
+    function criterionValue_(value) {
+      if (value === null || value === undefined || value === '') return 'Sem informação';
+      return typeof value === 'number' ? value.toLocaleString('pt-BR', { maximumFractionDigits: 6 }) : String(value);
+    }
+
+    function renderStudentCriteria_(student) {
+      var host = document.getElementById('apStudentCriteria');
+      var details = student.criteriaDetails || [];
+      var selected = state.workspace.criteria && state.workspace.criteria.selectedPackage;
+      var operators = { '=': 'igual a', '!=': 'diferente de', '>=': 'maior ou igual a', '<=': 'menor ou igual a', '>': 'maior que', '<': 'menor que', 'CONTÉM': 'contém', 'NÃO CONTÉM': 'não contém' };
+      var html = '<h4>Verificação dos critérios</h4>';
+      if (!student.criteriaActive) {
+        host.innerHTML = html + '<p>Nenhum pacote de critérios aplicado a esta análise.</p>';
+        return;
+      }
+      var failed = details.filter(function (d) { return !d.ignored && !d.passed; }).length;
+      var ignored = details.filter(function (d) { return d.ignored; }).length;
+      html += '<p><strong>' + (student.criteriaPassed ? 'Atende ao pacote.' : 'Não atende ao pacote.') + '</strong> ' + failed + ' critério(s) não atendido(s)' + (ignored ? ' e ' + ignored + ' não avaliado(s)' : '') + '.</p>';
+      if (selected) html += '<p>Pacote: ' + UiUtil.escapeHtml(selected.description || selected.id) + '</p>';
+      if (!details.length) {
+        host.innerHTML = html + '<p>O detalhamento não está disponível. Recarregue a mesa de apuração.</p>';
+        return;
+      }
+      html += '<ol class="ap-criterion-list">' + details.map(function (detail, index) {
+        var label = detail.ignored ? 'Não avaliado' : (detail.passed ? 'Atende' : 'Não atende');
+        var cls = detail.ignored ? 'is-none' : (detail.passed ? 'is-pass' : 'is-fail');
+        var text = '<li class="ap-criterion ' + cls + '"><div class="ap-criterion-head"><strong>' + UiUtil.escapeHtml(detail.fieldLabel || detail.field || 'Critério') + '</strong><span class="ap-criteria-result ' + cls + '">' + label + '</span></div>';
+        text += '<div>Valor do aluno: <strong>' + UiUtil.escapeHtml(criterionValue_(detail.left)) + '</strong></div>';
+        if (detail.ignored) text += '<div>' + UiUtil.escapeHtml(detail.reason || 'Regra não avaliada.') + '</div>';
+        else {
+          var expected = (operators[detail.operator] || detail.operator || '') + ' ' + criterionValue_(detail.right);
+          if (detail.comparisonType === 'CAMPO') expected += ' (' + (detail.comparisonFieldLabel || detail.comparisonField) + ')';
+          text += '<div>Exigência: ' + UiUtil.escapeHtml(expected) + '</div>';
+        }
+        if (index) text += '<small>Ligação com o resultado anterior: ' + (detail.connector === 'OU' ? 'OU' : 'E') + '</small>';
+        return text + '</li>';
+      }).join('') + '</ol><p>O resultado do pacote considera as ligações E/OU entre as regras.</p>';
+      host.innerHTML = html;
+    }
+
+    function renderStudentExisting_(s) {
+      var parts = [];
+      (s.awards || []).forEach(function (a) {
+        var snapshot = a.classificationIndicator ? ' · ' + UiUtil.escapeHtml(a.classificationIndicator) + ': ' + UiUtil.escapeHtml(a.classificationValue === null || a.classificationValue === undefined ? '—' : a.classificationValue) : '';
+        parts.push('Prêmio: <strong>' + UiUtil.escapeHtml(a.prize) + '</strong> (' + UiUtil.escapeHtml(a.status) + ')' + snapshot + (a.justification ? ' · ' + UiUtil.escapeHtml(a.justification) : ''));
+      });
+      (s.occurrences || []).forEach(function (o) { parts.push('Ocorrência: <strong>' + UiUtil.escapeHtml(o.effectiveFrom) + (o.effectiveTo ? ' a ' + UiUtil.escapeHtml(o.effectiveTo) : ' sem data de fim') + '</strong> · ' + UiUtil.escapeHtml(o.justification)); });
+      state.pending.filter(function (p) { return p.ra === s.ra; }).forEach(function (p) { parts.push('<em>Não salvo:</em> ' + (p.kind === 'awardee' ? 'prêmio ' + UiUtil.escapeHtml(p.prize) : 'ocorrência a partir de ' + UiUtil.escapeHtml(p.effectiveFrom))); });
+      document.getElementById('apStudentExisting').innerHTML = parts.length ? '<div class="ap-existing-records">' + parts.join('<br>') + '</div>' : '';
+    }
+
+    function renderStudentDetails_(details) {
+      var headers = details.headers || [], rows = details.rows || [];
+      document.getElementById('apStudentDetails').innerHTML = '<table class="ap-detail-table"><thead><tr>' + headers.map(function (h) { return '<th>' + UiUtil.escapeHtml(h) + '</th>'; }).join('') + '</tr></thead><tbody>' + rows.map(function (row) { return '<tr>' + headers.map(function (_,i) { return '<td>' + UiUtil.escapeHtml(row[i] === null || row[i] === undefined ? '' : row[i]) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table>';
+    }
+
+    function renderDecisionEditors_(student) {
+      var locked = lifecycleStatus_() !== 'EM APURAÇÃO';
+      var prizes = state.workspace.prizes || [];
+      var awardedIds = (student.awards || []).map(function (a) { return a.prizeId; }).concat(state.pending.filter(function (p) { return p.kind === 'awardee' && p.ra === student.ra; }).map(function (p) { return p.prizeId; }));
+      document.getElementById('apPrizeEditor').innerHTML = '<section class="ap-decision-card"><h4>Atribuir um ou mais prêmios</h4><div class="ap-prize-list">' +
+        (prizes.length ? prizes.map(function (p) { return '<label class="ap-prize-choice"><input type="checkbox" data-ap-prize value="' + UiUtil.escapeAttr(p.id) + '" ' + (awardedIds.indexOf(p.id)>=0 ? 'disabled' : '') + '> <span>' + UiUtil.escapeHtml(p.description) + '</span></label>'; }).join('') : '<div class="ap-help">Nenhum prêmio ativo cadastrado.</div>') +
+        '</div><div class="ap-help mt-1">Os tipos de prêmio são definidos no menu Prêmios. A ferramenta não interpreta trimestre, curso ou periodicidade do prêmio.</div>' +
+        '<div class="ap-form-field mt-2"><label>Justificativa da premiação *</label><textarea id="apPrizeReason" class="ap-control" ' + (locked?'disabled':'') + ' placeholder="Registre por que a premiação está sendo concedida."></textarea></div><div id="apPrizeWarning"></div>' +
+        '<div class="ap-decision-actions"><button id="apStagePrize" type="button" class="ap-decision-btn" ' + (locked ? 'disabled' : '') + '>Adicionar ao lote</button></div></section>';
+      document.getElementById('apOccurrenceEditor').innerHTML = '<section class="ap-decision-card"><h4>Registrar ocorrência</h4><div class="ap-form-grid"><div class="ap-form-field"><label>Data de início *</label><input id="apOccStart" type="date" class="ap-control" ' + (locked?'disabled':'') + '></div><div class="ap-form-field"><label>Data de fim</label><input id="apOccEnd" type="date" class="ap-control" ' + (locked?'disabled':'') + '></div></div><div class="ap-help">A data de início é obrigatória. A data de fim é recomendável, mas a vigência é definida pelo usuário.</div><div class="ap-form-field mt-2"><label>Justificativa *</label><textarea id="apOccReason" class="ap-control" ' + (locked?'disabled':'') + '></textarea></div><div id="apOccWarning"></div><div class="ap-decision-actions"><button id="apStageOccurrence" type="button" class="ap-decision-btn is-danger" ' + (locked?'disabled':'') + '>Adicionar ao lote</button></div></section>';
+      var prizeButton = document.getElementById('apStagePrize'); if (prizeButton) prizeButton.addEventListener('click', function () { stagePrizes_(student); });
+      var occButton = document.getElementById('apStageOccurrence'); if (occButton) occButton.addEventListener('click', function () { stageOccurrence_(student); });
+      var end = document.getElementById('apOccEnd'); if (end) end.addEventListener('change', function () { state.occurrenceWithoutEndConfirmed = false; document.getElementById('apOccWarning').innerHTML = ''; });
+    }
+
+    function currentVisualPosition_(ra) {
+      var list = filteredStudents_();
+      var index = list.findIndex(function (s) { return s.ra === ra; });
+      return index >= 0 ? index + 1 : null;
+    }
+
+    function numericOrNull_(value) {
+      return value === null || value === undefined || value === '' || !Number.isFinite(Number(value)) ? null : Number(value);
+    }
+
+    function selectedMetricSnapshot_(student) {
+      var field = document.getElementById('apMetric').value;
+      return { key: field, label: metricLabel_(field), value: numericOrNull_(student[field]) };
+    }
+
+    function awardAverage_(student, metricKey) {
+      var regime = state.workspace.context.regime;
+      if (regime === 'SEMESTRAL' || regime === 'CENID') return numericOrNull_(student.average);
+      if (regime === 'ANUAL' && ['trimester1Average','trimester2Average','trimester3Average'].indexOf(metricKey) >= 0) {
+        return numericOrNull_(student[metricKey]);
+      }
+      return null;
+    }
+
+    function stagePrizes_(student) {
+      if (state.loading || lifecycleStatus_() !== 'EM APURAÇÃO') return;
+      var checked = Array.prototype.slice.call(document.querySelectorAll('[data-ap-prize]:checked'));
+      var warning = document.getElementById('apPrizeWarning');
+      var reason = String(document.getElementById('apPrizeReason').value || '').trim();
+      warning.innerHTML = '';
+      if (!checked.length) { warning.innerHTML = '<div class="ap-warning">Selecione pelo menos um prêmio.</div>'; return; }
+      if (!reason) { warning.innerHTML = '<div class="ap-warning">Informe a justificativa da premiação.</div>'; return; }
+      var metric = selectedMetricSnapshot_(student);
+      var prizeMap = {}; (state.workspace.prizes || []).forEach(function (p) { prizeMap[p.id] = p; });
+      var added = 0;
+      checked.forEach(function (input) {
+        var prize = prizeMap[input.value]; if (!prize) return;
+        var duplicate = state.pending.some(function (p) { return p.kind === 'awardee' && p.ra === student.ra && p.prizeId === prize.id; }) || (student.awards || []).some(function (a) { return a.prizeId === prize.id; });
+        if (duplicate) return;
+        state.pending.push({
+          id: 'draft-' + Date.now() + '-' + Math.random(), kind: 'awardee', ra: student.ra, name: student.name,
+          prizeId: prize.id, prize: prize.description, course: student.course, coursePeriod: student.coursePeriod,
+          classGroup: student.classGroup, language: student.language, average: awardAverage_(student, metric.key),
+          frequency: numericOrNull_(student.frequency), classificationIndicator: metric.label, classificationValue: metric.value,
+          position: currentVisualPosition_(student.ra), justification: reason
+        });
+        added++;
+      });
+      if (added) showMessage_('success', added + ' premiação(ões) adicionada(s). O lote contém ' + state.pending.length + ' decisão(ões) aguardando salvamento.');
+      renderPending_(); renderTable_(); renderStudentExisting_(student); renderDecisionEditors_(student);
+    }
+
+    function stageOccurrence_(student) {
+      if (state.loading || lifecycleStatus_() !== 'EM APURAÇÃO') return;
+      var start = document.getElementById('apOccStart').value;
+      var end = document.getElementById('apOccEnd').value;
+      var reason = String(document.getElementById('apOccReason').value || '').trim();
+      var warning = document.getElementById('apOccWarning'); warning.innerHTML = '';
+      if (!start || !reason) { warning.innerHTML = '<div class="ap-warning">Informe a data de início e a justificativa.</div>'; return; }
+      if (end && end < start) { warning.innerHTML = '<div class="ap-warning">A data de fim não pode ser anterior à data de início.</div>'; return; }
+      if (!end && !state.occurrenceWithoutEndConfirmed) {
+        state.occurrenceWithoutEndConfirmed = true;
+        warning.innerHTML = '<div class="ap-warning">A data de fim é recomendável. Clique novamente em “Adicionar ao lote” para registrar sem data de fim.</div>';
+        return;
+      }
+      var duplicate = state.pending.some(function (p) { return p.kind === 'occurrence' && p.ra === student.ra; });
+      if (duplicate) { warning.innerHTML = '<div class="ap-warning">Já existe uma ocorrência pendente para este estudante.</div>'; return; }
+      state.pending.push({ id:'draft-' + Date.now(), kind:'occurrence', ra:student.ra, name:student.name, effectiveFrom:start, effectiveTo:end, justification:reason });
+      state.occurrenceWithoutEndConfirmed = false;
+      showMessage_('success','Ocorrência adicionada ao lote. A vigência será considerada na data de referência da apuração.');
+      renderPending_(); renderTable_(); renderStudentExisting_(student); renderDecisionEditors_(student);
+    }
+
+    function renderPending_() {
+      var count = state.pending.length;
+      var status = document.getElementById('apSaveState');
+      status.className = 'ap-save-state' + (count ? ' is-dirty' : '');
+      status.innerHTML = count ? '<i class="bi bi-circle-fill"></i><span>' + count + ' decisão(ões) não salva(s)</span>' : '<i class="bi bi-check-circle-fill"></i><span>Tudo salvo</span>';
+      document.getElementById('apReviewPending').hidden = !count;
+      document.getElementById('apSavePending').hidden = !count;
+      if (!count) document.getElementById('apPendingPanel').hidden = true;
+      var list = document.getElementById('apPendingList');
+      list.innerHTML = count ? state.pending.map(function (p) {
+        var detail = p.kind === 'awardee' ? 'Prêmio: ' + p.prize + ' · ' + p.classificationIndicator + ': ' + (p.classificationValue === null ? '—' : p.classificationValue) + ' · ' + p.justification : 'Ocorrência: ' + p.effectiveFrom + (p.effectiveTo ? ' a ' + p.effectiveTo : ' · sem data de fim');
+        return '<div class="ap-pending-item"><div><strong>' + UiUtil.escapeHtml(p.name) + '</strong><small>' + UiUtil.escapeHtml(detail) + '</small></div><button type="button" class="ap-icon-btn" data-ap-remove-draft="' + UiUtil.escapeAttr(p.id) + '"><i class="bi bi-x-lg"></i></button></div>';
+      }).join('') : '<div class="ap-empty">Nenhuma decisão pendente.</div>';
+      list.querySelectorAll('[data-ap-remove-draft]').forEach(function (button) { button.addEventListener('click', function () { removeDraft_(button.dataset.apRemoveDraft); }); });
+    }
+
+    function removeDraft_(id) {
+      if (state.loading) return;
+      state.pending = state.pending.filter(function (p) { return p.id !== id; });
+      renderPending_(); renderTable_();
+      var student = studentByRa_(state.selectedRa); if (student) { renderStudentExisting_(student); renderDecisionEditors_(student); }
+    }
+
+    function decisionPayload_() {
+      var context = currentContext_();
+      return Object.assign({}, context, {
+        awardees: state.pending.filter(function (p) { return p.kind === 'awardee'; }).map(function (p) { return {
+          ra:p.ra,name:p.name,prizeId:p.prizeId,course:p.course,coursePeriod:p.coursePeriod,classGroup:p.classGroup,language:p.language,
+          average:p.average,frequency:p.frequency,classificationIndicator:p.classificationIndicator,classificationValue:p.classificationValue,
+          position:p.position,justification:p.justification
+        }; }),
+        occurrences: state.pending.filter(function (p) { return p.kind === 'occurrence'; }).map(function (p) { return {
+          ra:p.ra,name:p.name,effectiveFrom:p.effectiveFrom,effectiveTo:p.effectiveTo,justification:p.justification
+        }; })
+      });
+    }
+
+    async function savePending_() {
+      if (state.loading) return false;
+      if (!state.pending.length) return true;
+      state.loading = true;
+      var submittedIds = state.pending.map(function (p) { return p.id; });
+      var prizeRevision = state.prizeRevision;
+      setBusy_(true, 'Salvando decisões em lote…');
+      try {
+        var response = await ApiClient.authenticatedCall('saveApurationDecisions', decisionPayload_());
+        state.pending = state.pending.filter(function (p) { return submittedIds.indexOf(p.id) < 0; });
+        state.workspace = response.workspace;
+        if (prizeRevision !== state.prizeRevision) state.workspace.prizes = regularPrizes_();
+        renderWorkspace_();
+        refreshStudentEditor_();
+        showMessage_('success', submittedIds.length + ' decisão(ões) salva(s) em lote.');
+        return true;
+      } catch (error) {
+        showMessage_('error', UiUtil.actionableErrorMessage(error));
+        return false;
+      } finally { state.loading = false; setBusy_(false); runQueuedRefresh_(); }
+    }
+
+    function requestTransition_(next) {
+      if (!next) return;
+      if (state.pending.length) { state.guardMode = 'transition'; state.pendingContext = { nextStatus: next }; showGuard_('Salve antes de mudar a situação','Existem decisões não salvas. Salve ou descarte o lote antes de publicar ou homologar.'); return; }
+      var now = Date.now();
+      if (state.transitionArmed !== next || now > state.transitionArmedUntil) {
+        state.transitionArmed = next; state.transitionArmedUntil = now + 6500;
+        var action = next === 'HOMOLOGADO' ? 'Homologar e descartar a base temporária' : 'Publicar resultado';
+        var button = document.getElementById('apTransition'); button.textContent = 'Confirmar: ' + action;
+        showMessage_('warning', next === 'HOMOLOGADO' ? 'A homologação consolidará os registros permanentes e excluirá os dados temporários deste conjunto.' : 'Confirme a publicação do resultado. Os registros ficarão bloqueados para novas alterações.');
+        return;
+      }
+      transition_(next);
+    }
+
+    function dismissTransitionProgress_() {
+      if (!state.transitionJob || !state.transitionJob.done) return;
+      clearTimeout(state.progressDismissTimer);
+      state.progressDismissTimer = null;
+      state.dismissedProgressJobId = state.transitionJob.jobId;
+      document.getElementById('apTransitionProgress').hidden = true;
+    }
+
+    function renderTransitionProgress_(job, running) {
+      clearTimeout(state.progressDismissTimer);
+      state.progressDismissTimer = null;
+      var box = document.getElementById('apTransitionProgress');
+      box.hidden = !job || Boolean(job.done && state.dismissedProgressJobId === job.jobId);
+      box.setAttribute('aria-busy', String(Boolean(running)));
+      if (!job || box.hidden) return;
+      document.getElementById('apCloseTransitionProgress').hidden = !job.done;
+      var context = job.context || {};
+      document.getElementById('apBatchTitle').textContent = (job.nextStatus === 'HOMOLOGADO' ? 'Homologação' : 'Publicação') + ' — ' + context.regime + ' ' + context.year + (context.semester ? '/' + context.semester : '');
+      document.getElementById('apBatchBar').value = Number(job.percent || 0);
+      document.getElementById('apBatchDetail').textContent = job.done
+        ? '100% · Concluído: ' + job.processedAwardees + ' premiação(ões) e ' + job.processedOccurrences + ' ocorrência(s).'
+        : job.percent + '% · ' + job.phaseLabel + ' · lote ' + job.batch + ' de ' + job.totalBatches + ' · ' + job.processed + ' de ' + job.total + ' linhas nesta etapa.';
+      document.getElementById('apResumeTransition').hidden = Boolean(running || job.done);
+      document.getElementById('apBatchActivity').textContent = job.done ? 'Processamento concluído.' : (running ? 'O sistema está trabalhando. Aguarde a conclusão.' : 'O progresso foi salvo. Você pode retomar de onde parou.');
+      if (job.done && !running && !state.transitionRunning) {
+        var completedJobId = job.jobId;
+        state.progressDismissTimer = setTimeout(function () {
+          if (state.transitionJob && state.transitionJob.jobId === completedJobId && state.transitionJob.done && !state.transitionRunning) dismissTransitionProgress_();
+        }, 5000);
+      }
+    }
+
+    async function transition_(next, resumeJob) {
+      if (state.loading) return;
+      state.loading = true;
+      state.transitionRunning = true;
+      state.transitionArmed = ''; state.transitionArmedUntil = 0;
+      closeStudent_();
+      setBusy_(true, 'Processando em lotes. Acompanhe o progresso acima…');
+      var started = Date.now();
+      var timer = setInterval(function () {
+        document.getElementById('apBatchActivity').textContent = 'O sistema está trabalhando · ' + Math.floor((Date.now() - started) / 1000) + ' s nesta execução. Aguarde a conclusão.';
+      }, 1000);
+      try {
+        var response;
+        if (resumeJob) response = { result: resumeJob };
+        else {
+          state.transitionJob = null;
+          renderTransitionProgress_(null, true);
+          var payload = currentContext_(); payload.nextStatus = next;
+          response = await ApiClient.authenticatedCall('transitionApurationResult', payload);
+        }
+        state.transitionJob = response.result;
+        renderTransitionProgress_(state.transitionJob, true);
+        while (!response.result.done) {
+          await new Promise(function (resolve) { setTimeout(resolve, 0); });
+          response = await ApiClient.authenticatedCall('processApurationTransition', state.transitionJob.jobId);
+          state.transitionJob = response.result;
+          renderTransitionProgress_(state.transitionJob, !response.result.done);
+        }
+        clearInterval(timer);
+        if (next === 'HOMOLOGADO') {
+          showMessage_('success','Resultado homologado. A base temporária foi descartada; premiados e ocorrências permanecem nos registros permanentes.');
+          state.workspace = null;
+          state.bootstrap = await ApiClient.authenticatedCall('getApurationBootstrap');
+          renderBootstrap_();
+          var first = (state.bootstrap.dataSets || [])[0];
+          if (first) await loadWorkspace_({ dataType:first.dataType,year:first.year,semester:first.semester }, true);
+          else renderEmpty_('Nenhuma base temporária disponível. Os resultados homologados permanecem nos menus Premiados e Ocorrências.');
+        } else {
+          state.workspace = response.workspace;
+          renderWorkspace_();
+          showMessage_('success','Resultado publicado.');
+        }
+        renderTransitionProgress_(state.transitionJob, false);
+      } catch (error) {
+        // Uma resposta pode falhar após o servidor salvar o checkpoint inicial.
+        if (!state.transitionJob) {
+          try { var latest = await ApiClient.authenticatedCall('getApurationBootstrap'); state.transitionJob = latest.transitionJob || null; } catch (lookupError) {}
+        }
+        showMessage_('error',UiUtil.actionableErrorMessage(error) + (state.transitionJob && !state.transitionJob.done ? ' O progresso foi salvo; clique em Retomar processamento.' : ''));
+        renderTransitionProgress_(state.transitionJob, false);
+        if (state.workspace) renderWorkspace_();
+      } finally {
+        clearInterval(timer); state.transitionRunning = false; state.loading = false;
+        renderTransitionProgress_(state.transitionJob, false);
+        setBusy_(false); runQueuedRefresh_();
+      }
+    }
+
+    function showGuard_(title,text) { document.getElementById('apGuardTitle').textContent=title;document.getElementById('apGuardText').textContent=text;document.getElementById('apGuard').hidden=false; }
+    function hideGuard_() { document.getElementById('apGuard').hidden=true; }
+
+    async function saveFromGuard_() {
+      var mode=state.guardMode, target=state.pendingContext;
+      var ok=await savePending_(); if(!ok)return; hideGuard_(); state.guardMode=''; state.pendingContext=null;
+      if(mode==='context'&&target) await loadWorkspace_(target);
+      else if(mode==='transition'&&target) requestTransition_(target.nextStatus);
+    }
+    function discardFromGuard_() {
+      var mode=state.guardMode,target=state.pendingContext;state.pending=[];renderPending_();hideGuard_();state.guardMode='';state.pendingContext=null;
+      if(mode==='context'&&target) loadWorkspace_(target);
+      else if(mode==='transition'&&target) requestTransition_(target.nextStatus);
+      else if(mode==='logout') showMessage_('warning','Decisões descartadas. Clique novamente no usuário para encerrar a sessão.');
+    }
+
+    function requestLogout() { state.guardMode='logout';state.pendingContext=null;showGuard_('Decisões não salvas','Antes de sair, salve as decisões ou descarte o rascunho. Depois, clique novamente no usuário para encerrar a sessão.'); }
+
+    function refreshStudentEditor_() {
+      var student = studentByRa_(state.selectedRa);
+      if (!student) { closeStudent_(); return; }
+      var values = {};
+      ['apPrizeReason','apOccStart','apOccEnd','apOccReason'].forEach(function (id) {
+        var el = document.getElementById(id); if (el) values[id] = el.value;
+      });
+      var checked = Array.prototype.map.call(document.querySelectorAll('[data-ap-prize]:checked'), function (el) { return el.value; });
+      renderStudentSummary_(student); renderStudentExisting_(student); renderDecisionEditors_(student);
+      Object.keys(values).forEach(function (id) { document.getElementById(id).value = values[id]; });
+      document.querySelectorAll('[data-ap-prize]').forEach(function (el) { el.checked = !el.disabled && checked.indexOf(el.value) >= 0; });
+      setBusy_(state.loading);
+    }
+
+    function regularPrizes_() {
+      return state.latestPrizes.filter(function (p) { return p.status === 'ATIVA' && p.category === 'REGULAR'; });
+    }
+
+    function refreshPrizes(prizes) {
+      state.latestPrizes = prizes || [];
+      state.prizeRevision++;
+      if (!state.workspace) return;
+      state.workspace.prizes = regularPrizes_();
+      var byId = {}; (prizes || []).forEach(function (p) { byId[p.id] = p; });
+      state.pending.forEach(function (p) { if (p.kind === 'awardee' && byId[p.prizeId]) p.prize = byId[p.prizeId].description; });
+      renderPending_(); renderTable_(); refreshStudentEditor_();
+    }
+
+    function runQueuedRefresh_() {
+      if (!state.refreshQueued || state.loading) return;
+      state.refreshQueued = false;
+      refreshAfterDataChange();
+    }
+
+    async function refreshAfterDataChange() {
+      if (!AppModel.state.authToken || !AppModel.state.permissions || !AppModel.state.permissions.canManageRecords) return true;
+      if (state.loading) { state.refreshQueued = true; return true; }
+      state.loading = true;
+      setBusy_(true);
+      var context = currentContext_();
+      var key = state.workspace && state.workspace.dataSet.key;
+      var view = {}, sort = state.sort;
+      ['apMetric','apGroup','apPeriod','apExtra','apSearch'].forEach(function (id) { view[id] = document.getElementById(id).value; });
+      try {
+        var bootstrapContext=await ApiClient.authenticatedCall('getApurationBootstrap');state.bootstrap=bootstrapContext;renderBootstrap_();
+        var selected = (state.bootstrap.dataSets || []).find(function (d) { return d.key === key; });
+        if (!selected && state.pending.length) {
+          document.getElementById('apYear').value = String(context.year);
+          renderPending_();
+          showMessage_('warning','O conjunto do lote pendente não está mais disponível. As decisões não salvas foram preservadas; revise o lote antes de continuar.');
+          return false;
+        }
+        selected = selected || (state.bootstrap.dataSets || [])[0];
+        if (!selected) {
+          state.workspace = null; closeStudent_();
+          renderEmpty_('Nenhum conjunto disponível. Importe dados em Gerenciar Dados para iniciar uma apuração.');
+          return true;
+        }
+        var prizeRevision = state.prizeRevision;
+        state.workspace = await ApiClient.authenticatedCall('getApurationWorkspace', selected.key === key ? context : { dataType:selected.dataType, year:selected.year, semester:selected.semester });
+        if (prizeRevision !== state.prizeRevision) state.workspace.prizes = regularPrizes_();
+        document.getElementById('apYear').value = String(selected.year);
+        renderDataSetOptions_(String(selected.year));
+        document.getElementById('apDataset').value = selected.key;
+        renderWorkspace_();
+        if (selected.key === key) {
+          Object.keys(view).forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el.tagName !== 'SELECT' || Array.prototype.some.call(el.options, function (option) { return option.value === view[id]; })) el.value = view[id];
+          });
+          state.sort = sort; renderTable_(); refreshStudentEditor_();
+        } else { state.selectedRa = ''; closeStudent_(); }
+        return true;
+      } catch(error) {
+        showMessage_('error','A alteração foi salva, mas não foi possível atualizar a mesa: ' + UiUtil.actionableErrorMessage(error));
+        return false;
+      } finally { state.loading = false; setBusy_(false); runQueuedRefresh_(); }
+    }
+
+    return Object.freeze({ init:init, load:load, hasPendingDecisions:hasPendingDecisions, requestLogout:requestLogout, refreshPrizes:refreshPrizes, refreshAfterDataChange:refreshAfterDataChange, refreshAfterPermanentRecordChange:refreshAfterDataChange });
+  })();
+</script>

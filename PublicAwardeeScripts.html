@@ -1,0 +1,257 @@
+<script>
+  /** Página pública de premiados + configuração administrativa. */
+  var PublicAwardeePortalController = (function () {
+    var state = { loaded: false, loading: false, payload: null, filters: {} };
+
+    function init() {
+      document.getElementById('btnRestrictedAccess').addEventListener('click', function () { AppView.showLogin(); });
+      document.getElementById('btnBackToPublic').addEventListener('click', show);
+      document.getElementById('pubReload').addEventListener('click', function () { load(true); });
+    }
+
+    function show() {
+      document.getElementById('startupScreen').hidden = true;
+      document.getElementById('loginScreen').hidden = true;
+      document.getElementById('authenticatedShell').hidden = true;
+      document.body.classList.remove('authenticated-mode');
+      document.getElementById('publicHeader').hidden = false;
+      document.getElementById('publicAwardeeScreen').hidden = false;
+      document.getElementById('btnRestrictedAccess').hidden = false;
+      load(false);
+    }
+
+    function setLoading_(loading) {
+      state.loading = Boolean(loading);
+      document.getElementById('pubLoading').hidden = !loading;
+      document.getElementById('pubContent').hidden = loading;
+      document.getElementById('pubReload').disabled = loading;
+    }
+
+    async function load(force) {
+      if (state.loading) return;
+      if (state.loaded && !force) { render_(); return; }
+      setLoading_(true);
+      try {
+        state.payload = await ApiClient.publicCall('getPublicAwardeePortal', state.filters || {});
+        state.loaded = true;
+        render_();
+      } catch (error) {
+        document.getElementById('pubLoading').hidden = true;
+        document.getElementById('pubContent').hidden = false;
+        document.getElementById('pubContent').innerHTML = '<div class="public-empty"><i class="bi bi-exclamation-circle"></i><strong>Não foi possível carregar os premiados.</strong><span>' + UiUtil.escapeHtml(UiUtil.actionableErrorMessage(error, 'Tente novamente em alguns instantes.')) + '</span></div>';
+      } finally { setLoading_(false); }
+    }
+
+    function filterControl_(filter) {
+      if (filter.key === 'search') {
+        return '<label class="public-filter public-filter-search"><span>' + UiUtil.escapeHtml(filter.label) + '</span><div class="public-search"><i class="bi bi-search"></i><input id="pubFilterSearch" value="' + UiUtil.escapeAttr(state.filters.search || '') + '" placeholder="Digite o nome"></div></label>';
+      }
+      var current = state.filters[filter.key] || '';
+      var options = '<option value="">Todos</option>' + (filter.values || []).map(function (value) {
+        return '<option value="' + UiUtil.escapeAttr(value) + '"' + (String(current) === String(value) ? ' selected' : '') + '>' + UiUtil.escapeHtml(value) + '</option>';
+      }).join('');
+      return '<label class="public-filter"><span>' + UiUtil.escapeHtml(filter.label) + '</span><select data-public-filter="' + UiUtil.escapeAttr(filter.key) + '">' + options + '</select></label>';
+    }
+
+    function display_(field, value) {
+      if (value === null || value === undefined || value === '') return '—';
+      if (field.key === 'frequencia' && !isNaN(Number(value))) return Number(value).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '%';
+      if (['media'].indexOf(field.key) >= 0 && !isNaN(Number(value))) return Number(value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      if (field.key === 'semestre' && value) return String(value) + 'º';
+      return String(value);
+    }
+
+    function render_() {
+      var p = state.payload || {};
+      var host = document.getElementById('pubContent');
+      document.getElementById('pubTitle').textContent = p.title || 'Premiados — Destaque Acadêmico';
+      document.getElementById('pubSubtitle').textContent = p.subtitle || '';
+      document.getElementById('pubTotal').textContent = String(Number(p.total || 0));
+      document.getElementById('pubFilters').innerHTML = (p.filters || []).map(filterControl_).join('');
+
+      if (!p.enabled) {
+        host.innerHTML = '<div class="public-empty"><i class="bi bi-eye-slash"></i><strong>Consulta pública temporariamente indisponível.</strong><span>A instituição desativou a exibição pública de premiados.</span></div>';
+        bindFilters_();
+        return;
+      }
+      if (!(p.records || []).length) {
+        host.innerHTML = '<div class="public-empty"><i class="bi bi-trophy"></i><strong>Nenhum premiado encontrado.</strong><span>Altere os filtros para consultar outros registros.</span></div>';
+        bindFilters_();
+        return;
+      }
+
+      var fields = p.fields || [];
+      var header = fields.map(function (field) { return '<th>' + UiUtil.escapeHtml(field.label) + '</th>'; }).join('');
+      var rows = (p.records || []).map(function (record) {
+        return '<tr>' + fields.map(function (field) { return '<td data-label="' + UiUtil.escapeAttr(field.label) + '">' + UiUtil.escapeHtml(display_(field, record[field.key])) + '</td>'; }).join('') + '</tr>';
+      }).join('');
+      host.innerHTML = '<div class="public-table-wrap"><table class="public-awardee-table"><thead><tr>' + header + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+      bindFilters_();
+    }
+
+    function bindFilters_() {
+      var search = document.getElementById('pubFilterSearch');
+      if (search) {
+        var timer = null;
+        search.addEventListener('input', function () {
+          clearTimeout(timer);
+          timer = setTimeout(function () { state.filters.search = search.value.trim(); state.loaded = false; load(true); }, 300);
+        });
+      }
+      document.querySelectorAll('[data-public-filter]').forEach(function (select) {
+        select.addEventListener('change', function () {
+          state.filters[select.dataset.publicFilter] = select.value;
+          state.loaded = false;
+          load(true);
+        });
+      });
+    }
+
+    function invalidate() { state.loaded = false; state.payload = null; }
+    return Object.freeze({ init: init, show: show, load: load, invalidate: invalidate });
+  })();
+
+  var PublicAwardeeSettingsController = (function () {
+    var state = { workspace: null, selectedFields: [], loading: false };
+
+    function init() {
+      document.getElementById('menuPublicPortal').addEventListener('click', open);
+      document.getElementById('pubCfgSave').addEventListener('click', save);
+      document.getElementById('pubCfgSelectDefault').addEventListener('click', restoreDefaultSelection_);
+      document.getElementById('pubCfgTitle').addEventListener('input', renderPreview_);
+      document.getElementById('pubCfgSubtitle').addEventListener('input', renderPreview_);
+      document.getElementById('pubCfgEnabled').addEventListener('change', renderPreview_);
+    }
+
+    function hideOtherWorkspaces_() {
+      ['mainContent','awardeeWorkspace','manualAwardeeWorkspace','awardeeReportWorkspace'].forEach(function (id) { document.getElementById(id).hidden = true; });
+      document.getElementById('publicPortalConfigWorkspace').hidden = false;
+      document.querySelectorAll('.sidebar-item').forEach(function (button) { button.classList.toggle('is-active', button.id === 'menuPublicPortal'); });
+      document.getElementById('activeSectionTitle').textContent = 'Página pública';
+      try { bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('sidePanel')).hide(); } catch (error) {}
+    }
+
+    async function open() {
+      if (!AppModel.state.permissions || !AppModel.state.permissions.canManagePublicPortal) return;
+      hideOtherWorkspaces_();
+      await load_();
+    }
+
+    async function load_() {
+      if (state.loading) return;
+      state.loading = true;
+      setMessage_('', 'Carregando configuração…');
+      try {
+        state.workspace = await ApiClient.authenticatedCall('getPublicAwardeeSettings');
+        state.selectedFields = (state.workspace.configuration.fields || []).slice();
+        render_();
+        setMessage_('success', 'Configuração pública carregada.');
+      } catch (error) {
+        setMessage_('error', UiUtil.actionableErrorMessage(error, 'Não foi possível carregar a página pública.'));
+      } finally { state.loading = false; }
+    }
+
+    function setMessage_(type, message) {
+      var box = document.getElementById('pubCfgMessage');
+      box.hidden = !message;
+      box.className = 'ap-inline-message' + (type ? ' is-' + type : '');
+      box.textContent = message || '';
+    }
+
+    function fieldMap_() {
+      var map = {};
+      ((state.workspace && state.workspace.fields) || []).forEach(function (field) { map[field.key] = field; });
+      return map;
+    }
+
+    function render_() {
+      var cfg = state.workspace.configuration || {};
+      document.getElementById('pubCfgEnabled').checked = cfg.enabled !== false;
+      document.getElementById('pubCfgTitle').value = cfg.title || '';
+      document.getElementById('pubCfgSubtitle').value = cfg.subtitle || '';
+      renderFields_();
+      renderPreview_();
+    }
+
+    function renderFields_() {
+      var map = fieldMap_();
+      var all = (state.workspace && state.workspace.fields) || [];
+      var selected = {};
+      state.selectedFields.forEach(function (key) { selected[key] = true; });
+      var availableHtml = all.map(function (field) {
+        return '<label class="public-config-option"><input type="checkbox" data-pubcfg-field="' + UiUtil.escapeAttr(field.key) + '"' + (selected[field.key] ? ' checked' : '') + '><span><strong>' + UiUtil.escapeHtml(field.label) + '</strong><small>' + (field.filterable ? 'Também disponível como filtro público' : 'Campo de exibição') + '</small></span></label>';
+      }).join('');
+      document.getElementById('pubCfgAvailable').innerHTML = availableHtml;
+      document.querySelectorAll('[data-pubcfg-field]').forEach(function (checkbox) {
+        checkbox.addEventListener('change', function () {
+          var key = checkbox.dataset.pubcfgField;
+          if (checkbox.checked && state.selectedFields.indexOf(key) < 0) state.selectedFields.push(key);
+          if (!checkbox.checked) state.selectedFields = state.selectedFields.filter(function (item) { return item !== key; });
+          renderFields_(); renderPreview_();
+        });
+      });
+
+      document.getElementById('pubCfgSelected').innerHTML = state.selectedFields.map(function (key) {
+        var field = map[key]; if (!field) return '';
+        return '<div class="public-config-selected"><i class="bi bi-grip-vertical"></i><span>' + UiUtil.escapeHtml(field.label) + '</span><div><button type="button" data-pubcfg-move="-1" data-key="' + UiUtil.escapeAttr(key) + '">↑</button><button type="button" data-pubcfg-move="1" data-key="' + UiUtil.escapeAttr(key) + '">↓</button></div></div>';
+      }).join('');
+      document.querySelectorAll('[data-pubcfg-move]').forEach(function (button) {
+        button.addEventListener('click', function () {
+          var key = button.dataset.key, delta = Number(button.dataset.pubcfgMove), index = state.selectedFields.indexOf(key), next = index + delta;
+          if (index < 0 || next < 0 || next >= state.selectedFields.length) return;
+          var temp = state.selectedFields[index]; state.selectedFields[index] = state.selectedFields[next]; state.selectedFields[next] = temp;
+          renderFields_(); renderPreview_();
+        });
+      });
+    }
+
+    function restoreDefaultSelection_() {
+      state.selectedFields = ['nome','curso','periodo','turma','premio','categoria','ano','regime'].filter(function (key) { return Boolean(fieldMap_()[key]); });
+      renderFields_(); renderPreview_();
+    }
+
+    function display_(field, value) {
+      if (value === null || value === undefined || value === '') return '—';
+      if (field.key === 'frequencia' && !isNaN(Number(value))) return Number(value).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '%';
+      if (field.key === 'media' && !isNaN(Number(value))) return Number(value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return String(value);
+    }
+
+    function renderPreview_() {
+      if (!state.workspace) return;
+      var map = fieldMap_();
+      var fields = state.selectedFields.map(function (key) { return map[key]; }).filter(Boolean);
+      document.getElementById('pubCfgPreviewTitle').textContent = document.getElementById('pubCfgTitle').value || 'Premiados — Destaque Acadêmico';
+      document.getElementById('pubCfgPreviewSubtitle').textContent = document.getElementById('pubCfgSubtitle').value || '';
+      document.getElementById('pubCfgPreviewStatus').textContent = document.getElementById('pubCfgEnabled').checked ? 'PUBLICAÇÃO ATIVA' : 'PUBLICAÇÃO DESATIVADA';
+      var records = (state.workspace.previewRecords || []).slice(0, 5);
+      if (!fields.length) {
+        document.getElementById('pubCfgPreviewTable').innerHTML = '<div class="public-empty compact"><strong>Selecione ao menos um campo.</strong></div>';
+        return;
+      }
+      document.getElementById('pubCfgPreviewTable').innerHTML = '<div class="public-table-wrap"><table class="public-awardee-table"><thead><tr>' + fields.map(function (field) { return '<th>' + UiUtil.escapeHtml(field.label) + '</th>'; }).join('') + '</tr></thead><tbody>' + records.map(function (record) { return '<tr>' + fields.map(function (field) { return '<td>' + UiUtil.escapeHtml(display_(field, record[field.key])) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>';
+    }
+
+    async function save() {
+      if (!state.selectedFields.length) { setMessage_('error', 'Selecione pelo menos um campo para a página pública.'); return; }
+      document.getElementById('pubCfgSave').disabled = true;
+      setMessage_('', 'Salvando configuração…');
+      try {
+        state.workspace = await ApiClient.authenticatedCall('savePublicAwardeeSettings', {
+          enabled: document.getElementById('pubCfgEnabled').checked,
+          title: document.getElementById('pubCfgTitle').value.trim(),
+          subtitle: document.getElementById('pubCfgSubtitle').value.trim(),
+          fields: state.selectedFields.slice()
+        });
+        state.selectedFields = (state.workspace.configuration.fields || []).slice();
+        PublicAwardeePortalController.invalidate();
+        render_();
+        setMessage_('success', 'Página pública atualizada. A próxima consulta pública já utilizará esta configuração.');
+      } catch (error) {
+        setMessage_('error', UiUtil.actionableErrorMessage(error, 'Não foi possível salvar a configuração pública.'));
+      } finally { document.getElementById('pubCfgSave').disabled = false; }
+    }
+
+    return Object.freeze({ init: init, open: open });
+  })();
+</script>

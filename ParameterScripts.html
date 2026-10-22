@@ -1,0 +1,175 @@
+<script>
+  var ParameterPanelModel=(function(){
+    var state={panel:null,context:null,tab:'parameters',mode:'list',selectedId:'',busy:false,deleteConfirmId:'',editingPackage:null};
+    function reset(){state.mode='list';state.selectedId='';state.deleteConfirmId='';state.editingPackage=null;}
+    function selectedParameter(){return state.context&&(state.context.parameters||[]).find(function(p){return p.id===state.selectedId;})||null;}
+    function selectedPackage(){return state.context&&(state.context.packages||[]).find(function(p){return p.id===state.selectedId;})||null;}
+    return Object.freeze({state:state,reset:reset,selectedParameter:selectedParameter,selectedPackage:selectedPackage});
+  })();
+
+  var ParameterPanelView=(function(){
+    function tabHeader_(){
+      var tab=ParameterPanelModel.state.tab;
+      return '<div class="btn-group btn-group-sm w-100 mb-3" role="group">'+
+        '<button type="button" class="btn '+(tab==='parameters'?'btn-success':'btn-outline-success')+'" data-param-tab="parameters">Parâmetros</button>'+
+        '<button type="button" class="btn '+(tab==='packages'?'btn-success':'btn-outline-success')+'" data-param-tab="packages">Pacotes</button></div>';
+    }
+    function usageText_(u){
+      u=u||{};
+      if(!Number(u.total||0))return 'Ainda não utilizado';
+      return Number(u.approved||0)+' homologado(s) · '+Number(u.published||0)+' publicado(s) · '+Number(u.underReview||0)+' em apuração';
+    }
+    function parameterImmutable_(p){
+      if(!p||!ParameterPanelModel.state.context)return false;
+      return (ParameterPanelModel.state.context.packages||[]).some(function(pkg){
+        return pkg.usage&&pkg.usage.immutable&&(pkg.rules||[]).some(function(r){return r.parameterId===p.id;});
+      });
+    }
+    function render(){
+      var state=ParameterPanelModel.state,container=document.getElementById('sidePanelContent');
+      if(!state.context){container.innerHTML='<div class="parameter-empty p-3">Carregando…</div>';return;}
+      if(state.mode==='parameter-detail')renderParameterDetail_(container);
+      else if(state.mode==='package-detail')renderPackageDetail_(container);
+      else renderList_(container);
+      bindTabs_(container);
+    }
+    function renderList_(container){
+      var state=ParameterPanelModel.state,context=state.context;
+      if(state.tab==='parameters'){
+        var rows=context.parameters||[];
+        container.innerHTML=tabHeader_()+
+          '<div class="parameter-list-intro mb-2">Parâmetros são regras elementares reutilizadas pelos pacotes. Registros já usados em apuração tornam-se históricos e imutáveis.</div>'+
+          '<div class="admin-record-list"><div class="admin-record-row admin-record-head admin-param-cols"><span>Parâmetro</span><span>Regra</span><span>Situação</span></div>'+
+          (rows.map(function(p){
+            var rule=p.operator+' · '+p.comparisonType+(p.value!==''?' · '+String(p.value).replace(/\n/g,', '):'');
+            return '<button type="button" class="admin-record-row admin-record-item admin-param-cols" data-parameter-id="'+UiUtil.escapeAttr(p.id)+'">'+
+              '<span><strong>'+UiUtil.escapeHtml(p.description)+'</strong><small>'+UiUtil.escapeHtml(p.id)+'</small></span><span>'+UiUtil.escapeHtml(rule)+'</span><span><span class="badge '+(p.status==='ATIVO'?'text-bg-success':'text-bg-secondary')+'">'+UiUtil.escapeHtml(p.status)+'</span></span></button>';
+          }).join('')||'<div class="parameter-empty p-3">Nenhum parâmetro cadastrado.</div>')+'</div>';
+        container.querySelectorAll('[data-parameter-id]').forEach(function(b){b.addEventListener('click',function(){ParameterPanelController.editParameter(b.dataset.parameterId);});});
+      }else{
+        var packages=context.packages||[];
+        container.innerHTML=tabHeader_()+
+          '<div class="parameter-list-intro mb-2">Só pode existir um pacote ATIVO por tipo. Depois da primeira apuração vinculada, a composição do pacote fica imutável.</div>'+
+          '<div class="admin-record-list"><div class="admin-record-row admin-record-head admin-package-cols"><span>Pacote</span><span>Tipo / regras</span><span>Situação</span></div>'+
+          (packages.map(function(p){
+            return '<button type="button" class="admin-record-row admin-record-item admin-package-cols" data-package-id="'+UiUtil.escapeAttr(p.id)+'">'+
+              '<span><strong>'+UiUtil.escapeHtml(p.description)+'</strong><small>'+UiUtil.escapeHtml(usageText_(p.usage))+'</small></span>'+
+              '<span>'+UiUtil.escapeHtml(p.regime+' · '+(p.rules||[]).length+' regra(s)')+'</span>'+
+              '<span><span class="badge '+(p.status==='ATIVO'?'text-bg-success':'text-bg-secondary')+'">'+UiUtil.escapeHtml(p.status)+'</span></span></button>';
+          }).join('')||'<div class="parameter-empty p-3">Nenhum pacote cadastrado.</div>')+'</div>';
+        container.querySelectorAll('[data-package-id]').forEach(function(b){b.addEventListener('click',function(){ParameterPanelController.editPackage(b.dataset.packageId);});});
+      }
+    }
+
+    function renderParameterDetail_(container){
+      var state=ParameterPanelModel.state,p=state.selectedId?ParameterPanelModel.selectedParameter():null,isNew=!state.selectedId,context=state.context;
+      var locked=!isNew&&parameterImmutable_(p);
+      container.innerHTML=tabHeader_()+
+        '<button type="button" class="btn btn-link btn-sm p-0 mb-3" id="paramBack"><i class="bi bi-arrow-left me-1"></i>Voltar</button>'+
+        '<div class="admin-detail-line mb-3"><div><small>'+(isNew?'NOVO PARÂMETRO':'PARÂMETRO')+'</small><strong>'+UiUtil.escapeHtml(isNew?'Nova regra elementar':p.description)+'</strong></div><span>'+UiUtil.escapeHtml(isNew?'ID gerado ao salvar':p.id)+'</span></div>'+
+        (locked?'<div class="admin-lock-note mb-3"><i class="bi bi-lock-fill"></i><span>Este parâmetro integra um pacote já utilizado. Seu conteúdo é histórico e não pode ser alterado.</span></div>':'')+
+        '<div class="mb-3"><label class="form-label normal-label">Descrição</label><input id="paramDescription" class="form-control" maxlength="180" value="'+UiUtil.escapeAttr(p?p.description:'')+'" '+(locked?'disabled':'')+'></div>'+
+        '<div class="row g-2 mb-3"><div class="col-5"><label class="form-label normal-label">Operador</label><select id="paramOperator" class="form-select" '+(locked?'disabled':'')+'>'+
+          (context.operators||[]).map(function(op){return '<option value="'+UiUtil.escapeAttr(op)+'" '+(p&&p.operator===op?'selected':'')+'>'+UiUtil.escapeHtml(op)+'</option>';}).join('')+'</select></div>'+
+        '<div class="col-7"><label class="form-label normal-label">Comparação</label><select id="paramComparisonType" class="form-select" '+(locked?'disabled':'')+'>'+
+          (context.comparisonTypes||[]).map(function(t){return '<option value="'+UiUtil.escapeAttr(t)+'" '+(p&&p.comparisonType===t?'selected':'')+'>'+UiUtil.escapeHtml(t)+'</option>';}).join('')+'</select></div></div>'+
+        '<div class="mb-3" id="paramValueWrap"><label class="form-label normal-label">Valor / lista de valores</label><textarea id="paramValue" class="form-control" rows="4" '+(locked?'disabled':'')+'>'+UiUtil.escapeHtml(p?p.value:'')+'</textarea><div class="form-text">Para IGNORAR, informe um prefixo por linha. Ex.: ESTÁGIO, TCC, ATIVIDADES COMPLEMENTARES.</div></div>'+
+        '<div class="mb-3"><label class="form-label normal-label">Situação</label><select id="paramStatus" class="form-select" '+(locked?'disabled':'')+'>'+
+          (context.parameterStatuses||[]).map(function(s){return '<option value="'+UiUtil.escapeAttr(s)+'" '+((p?p.status:'ATIVO')===s?'selected':'')+'>'+UiUtil.escapeHtml(s)+'</option>';}).join('')+'</select></div>'+
+        '<div id="paramInlineMessage"></div><div class="d-flex gap-2 justify-content-end"><button id="paramDelete" class="btn btn-outline-danger btn-sm" '+(isNew||locked?'disabled':'')+'>Excluir</button><button id="paramSave" class="btn btn-success btn-sm" '+(locked?'disabled':'')+'>Salvar</button></div>';
+      document.getElementById('paramBack').addEventListener('click',ParameterPanelController.back);
+      if(!locked){document.getElementById('paramComparisonType').addEventListener('change',updateParameterValueVisibility_);document.getElementById('paramOperator').addEventListener('change',updateParameterOperator_);document.getElementById('paramSave').addEventListener('click',ParameterPanelController.saveParameter);document.getElementById('paramDelete').addEventListener('click',ParameterPanelController.requestDeleteParameter);}
+      updateParameterOperator_();updateParameterValueVisibility_();
+    }
+    function updateParameterOperator_(){
+      var op=document.getElementById('paramOperator'),type=document.getElementById('paramComparisonType');if(!op||!type)return;
+      if(op.value==='IGNORAR'){type.value='VALOR';type.disabled=true;}else if(!parameterImmutable_(ParameterPanelModel.selectedParameter()))type.disabled=false;
+      updateParameterValueVisibility_();
+    }
+    function updateParameterValueVisibility_(){var s=document.getElementById('paramComparisonType'),w=document.getElementById('paramValueWrap');if(s&&w)w.hidden=s.value!=='VALOR';}
+
+    function packageRuleHtml_(rule,index,pkg,locked){
+      var context=ParameterPanelModel.state.context;
+      var fields=(context.fields||[]).filter(function(f){return !pkg.regime||(f.regimes||[]).indexOf(pkg.regime)>=0;});
+      var parameters=(context.parameters||[]).filter(function(p){return p.status==='ATIVO'||p.id===rule.parameterId;});
+      var selectedParam=parameters.find(function(p){return p.id===rule.parameterId;})||null;
+      var needsField=selectedParam&&selectedParam.comparisonType==='CAMPO';
+      return '<div class="package-rule-line" data-rule-index="'+index+'"><div class="package-rule-main">'+
+        '<select class="form-select form-select-sm rule-connector" '+(index===0||locked?'disabled':'')+'><option>E</option><option '+(rule.connector==='OU'?'selected':'')+'>OU</option></select>'+
+        '<select class="form-select form-select-sm rule-field" '+(locked?'disabled':'')+'>'+fields.map(function(f){return '<option value="'+UiUtil.escapeAttr(f.key)+'" '+(f.key===rule.field?'selected':'')+'>'+UiUtil.escapeHtml(f.label)+'</option>';}).join('')+'</select>'+
+        '<select class="form-select form-select-sm rule-parameter" '+(locked?'disabled':'')+'>'+parameters.map(function(p){return '<option value="'+UiUtil.escapeAttr(p.id)+'" '+(p.id===rule.parameterId?'selected':'')+'>'+UiUtil.escapeHtml(p.description)+'</option>';}).join('')+'</select>'+
+        '<select class="form-select form-select-sm rule-comparison-field" '+(!needsField||locked?'disabled':'')+'><option value="">—</option>'+fields.map(function(f){return '<option value="'+UiUtil.escapeAttr(f.key)+'" '+(f.key===rule.comparisonField?'selected':'')+'>'+UiUtil.escapeHtml(f.label)+'</option>';}).join('')+'</select>'+
+        (locked?'':'<button type="button" class="btn btn-outline-danger btn-sm rule-remove" title="Remover regra"><i class="bi bi-x-lg"></i></button>')+'</div></div>';
+    }
+
+    function renderPackageDetail_(container){
+      var state=ParameterPanelModel.state,original=state.selectedId?ParameterPanelModel.selectedPackage():null,isNew=!state.selectedId;
+      var pkg=original?JSON.parse(JSON.stringify(original)):{id:'',description:'',regime:'SEMESTRAL',status:'ATIVO',rules:[],usage:{total:0,immutable:false,canDeactivate:true}};
+      state.editingPackage=pkg;
+      var context=state.context,usage=pkg.usage||{},locked=Boolean(usage.immutable);
+      var statusLocked=locked&&(pkg.status==='INATIVO'||!usage.canDeactivate);
+      container.innerHTML=tabHeader_()+
+        '<button type="button" class="btn btn-link btn-sm p-0 mb-3" id="pkgBack"><i class="bi bi-arrow-left me-1"></i>Voltar</button>'+
+        '<div class="admin-detail-line mb-3"><div><small>'+(isNew?'NOVO PACOTE':'PACOTE DE PARÂMETROS')+'</small><strong>'+UiUtil.escapeHtml(isNew?'Nova versão de critérios':pkg.description)+'</strong></div><span>'+UiUtil.escapeHtml(isNew?'ID gerado ao salvar':pkg.id)+'</span></div>'+
+        (locked?'<div class="admin-lock-note mb-3"><i class="bi bi-lock-fill"></i><span>Pacote já utilizado: sua composição é imutável. '+UiUtil.escapeHtml(usageText_(usage))+'. '+(usage.canDeactivate?'Como todas as apurações vinculadas estão homologadas, ele pode ser inativado.':'Enquanto houver apuração em andamento ou publicada, ele não pode ser inativado.')+'</span></div>':'')+
+        '<div class="mb-2"><label class="form-label normal-label">Descrição do pacote</label><input id="pkgDescription" class="form-control" value="'+UiUtil.escapeAttr(pkg.description)+'" '+(locked?'disabled':'')+'></div>'+
+        '<div class="row g-2 mb-3"><div class="col-6"><label class="form-label normal-label">Tipo / regime</label><select id="pkgRegime" class="form-select" '+(locked?'disabled':'')+'>'+
+          (context.regimes||[]).map(function(r){return '<option value="'+UiUtil.escapeAttr(r)+'" '+(pkg.regime===r?'selected':'')+'>'+UiUtil.escapeHtml(r)+'</option>';}).join('')+'</select></div>'+
+        '<div class="col-6"><label class="form-label normal-label">Situação</label><select id="pkgStatus" class="form-select" '+(statusLocked?'disabled':'')+'>'+
+          (context.packageStatuses||[]).map(function(s){return '<option value="'+UiUtil.escapeAttr(s)+'" '+(pkg.status===s?'selected':'')+'>'+UiUtil.escapeHtml(s)+'</option>';}).join('')+'</select></div></div>'+
+        '<div class="d-flex align-items-center justify-content-between mb-2"><div><strong class="small">Regras do pacote</strong><small class="d-block text-secondary">Ordem de avaliação e parâmetros associados.</small></div><button id="pkgAddRule" class="btn btn-outline-secondary btn-sm" '+(locked?'disabled':'')+'>+ Regra</button></div>'+
+        '<div class="package-rule-header"><span>Conector</span><span>Campo / indicador</span><span>Parâmetro</span><span>Comparar com</span><span></span></div><div id="pkgRules"></div><div id="pkgInlineMessage"></div>'+
+        '<div class="d-flex gap-2 justify-content-end mt-3"><button id="pkgDelete" class="btn btn-outline-danger btn-sm" '+(isNew||locked?'disabled':'')+'>Excluir</button><button id="pkgSave" class="btn btn-success btn-sm" '+(statusLocked&&locked?'disabled':'')+'>Salvar pacote</button></div>';
+      document.getElementById('pkgBack').addEventListener('click',ParameterPanelController.back);
+      if(!locked){document.getElementById('pkgAddRule').addEventListener('click',ParameterPanelController.addRule);document.getElementById('pkgRegime').addEventListener('change',function(){state.editingPackage.regime=this.value;renderPackageRules_();});}
+      if(!(statusLocked&&locked))document.getElementById('pkgSave').addEventListener('click',ParameterPanelController.savePackage);
+      if(!isNew&&!locked)document.getElementById('pkgDelete').addEventListener('click',ParameterPanelController.requestDeletePackage);
+      renderPackageRules_();
+    }
+
+    function renderPackageRules_(){
+      var pkg=ParameterPanelModel.state.editingPackage,host=document.getElementById('pkgRules');if(!host)return;
+      var locked=Boolean(pkg&&pkg.usage&&pkg.usage.immutable);
+      host.innerHTML=(pkg.rules||[]).map(function(r,i){return packageRuleHtml_(r,i,pkg,locked);}).join('')||'<div class="parameter-empty p-2 mb-2">Nenhuma regra cadastrada.</div>';
+      if(locked)return;
+      host.querySelectorAll('[data-rule-index]').forEach(function(card){
+        var i=Number(card.dataset.ruleIndex);
+        card.querySelector('.rule-connector').addEventListener('change',function(){pkg.rules[i].connector=this.value;});
+        card.querySelector('.rule-field').addEventListener('change',function(){pkg.rules[i].field=this.value;});
+        card.querySelector('.rule-parameter').addEventListener('change',function(){pkg.rules[i].parameterId=this.value;var p=(ParameterPanelModel.state.context.parameters||[]).find(function(x){return x.id===pkg.rules[i].parameterId;});if(!p||p.comparisonType!=='CAMPO')pkg.rules[i].comparisonField='';renderPackageRules_();});
+        card.querySelector('.rule-comparison-field').addEventListener('change',function(){pkg.rules[i].comparisonField=this.value;});
+        card.querySelector('.rule-remove').addEventListener('click',function(){pkg.rules.splice(i,1);renderPackageRules_();});
+      });
+    }
+
+    function parameterValues(){return {id:ParameterPanelModel.state.selectedId||'',description:String(document.getElementById('paramDescription').value||'').trim(),operator:document.getElementById('paramOperator').value,comparisonType:document.getElementById('paramComparisonType').value,value:document.getElementById('paramComparisonType').value==='VALOR'?String(document.getElementById('paramValue').value||'').trim():'',status:document.getElementById('paramStatus').value};}
+    function packageValues(){var pkg=ParameterPanelModel.state.editingPackage||{};return {id:ParameterPanelModel.state.selectedId||'',description:String(document.getElementById('pkgDescription').value||'').trim(),regime:document.getElementById('pkgRegime').value,status:document.getElementById('pkgStatus').value,rules:(pkg.rules||[]).map(function(r,index){return{id:r.id||'',connector:index===0?'E':r.connector,field:r.field,parameterId:r.parameterId,comparisonField:r.comparisonField||''};})};}
+    function bindTabs_(container){container.querySelectorAll('[data-param-tab]').forEach(function(b){b.addEventListener('click',function(){ParameterPanelController.changeTab(b.dataset.paramTab);});});}
+    return Object.freeze({render:render,parameterValues:parameterValues,packageValues:packageValues,renderPackageRules:renderPackageRules_});
+  })();
+
+  var ParameterPanelController=(function(){
+    function init(){ParameterPanelModel.state.panel=bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('sidePanel'),{backdrop:true,keyboard:true,scroll:false});document.getElementById('menuParameters').addEventListener('click',open);document.getElementById('btnParameterNew').addEventListener('click',newParameter);document.getElementById('btnPackageNew').addEventListener('click',newPackage);}
+    async function open(){
+      if(!AppModel.state.permissions||!AppModel.state.permissions.canManageCruds)return;
+      document.getElementById('sidePanelTitle').textContent='Parâmetros';document.getElementById('userPanelActions').hidden=true;document.getElementById('prizePanelActions').hidden=true;document.getElementById('parameterPanelActions').hidden=false;document.getElementById('dataPanelActions').hidden=true;document.getElementById('recordPanelActions').hidden=true;
+      ParameterPanelModel.state.panel.show();ParameterPanelModel.reset();UiUtil.setSideStatus(15,'info','Carregando parâmetros e pacotes.');
+      try{ParameterPanelModel.state.context=await ApiClient.authenticatedCall('getParameterAdminContext');ParameterPanelView.render();UiUtil.setSideStatus(100,'success',String((ParameterPanelModel.state.context.parameters||[]).length)+' parâmetro(s) e '+String((ParameterPanelModel.state.context.packages||[]).length)+' pacote(s).');}
+      catch(error){UiUtil.setSideStatus(0,'error',UiUtil.actionableErrorMessage(error,'Não foi possível carregar os parâmetros.'));}
+    }
+    function changeTab(tab){ParameterPanelModel.state.tab=tab==='packages'?'packages':'parameters';ParameterPanelModel.reset();ParameterPanelView.render();}
+    function editParameter(id){ParameterPanelModel.state.tab='parameters';ParameterPanelModel.state.mode='parameter-detail';ParameterPanelModel.state.selectedId=id;ParameterPanelView.render();}
+    function newParameter(){if(!ParameterPanelModel.state.context)return;ParameterPanelModel.state.tab='parameters';ParameterPanelModel.state.mode='parameter-detail';ParameterPanelModel.state.selectedId='';ParameterPanelView.render();}
+    function editPackage(id){ParameterPanelModel.state.tab='packages';ParameterPanelModel.state.mode='package-detail';ParameterPanelModel.state.selectedId=id;ParameterPanelView.render();}
+    function newPackage(){if(!ParameterPanelModel.state.context)return;ParameterPanelModel.state.tab='packages';ParameterPanelModel.state.mode='package-detail';ParameterPanelModel.state.selectedId='';ParameterPanelView.render();}
+    function back(){ParameterPanelModel.reset();ParameterPanelView.render();}
+    async function saveParameter(){var payload=ParameterPanelView.parameterValues();try{UiUtil.setSideStatus(45,'info','Salvando parâmetro.');ParameterPanelModel.state.context=await ApiClient.authenticatedCall('saveParameter',payload);ParameterPanelModel.reset();ParameterPanelView.render();UiUtil.setSideStatus(100,'success','Parâmetro salvo.');}catch(error){UiUtil.setSideStatus(0,'error',UiUtil.actionableErrorMessage(error));}}
+    function requestDeleteParameter(){var host=document.getElementById('paramInlineMessage');if(!host)return;if(ParameterPanelModel.state.deleteConfirmId===ParameterPanelModel.state.selectedId){deleteParameter_();return;}ParameterPanelModel.state.deleteConfirmId=ParameterPanelModel.state.selectedId;host.innerHTML='<div class="alert alert-warning py-2 small">A exclusão é física. Se não houver vínculos, clique novamente em <strong>Excluir</strong>.</div>';}
+    async function deleteParameter_(){try{UiUtil.setSideStatus(40,'info','Verificando vínculos e excluindo parâmetro.');ParameterPanelModel.state.context=await ApiClient.authenticatedCall('deleteParameter',ParameterPanelModel.state.selectedId);ParameterPanelModel.reset();ParameterPanelView.render();UiUtil.setSideStatus(100,'success','Parâmetro excluído.');}catch(error){UiUtil.setSideStatus(0,'error',UiUtil.actionableErrorMessage(error));}}
+    async function savePackage(){var payload=ParameterPanelView.packageValues();try{UiUtil.setSideStatus(45,'info','Salvando pacote de parâmetros.');ParameterPanelModel.state.context=await ApiClient.authenticatedCall('saveParameterPackage',payload);ParameterPanelModel.reset();ParameterPanelView.render();UiUtil.setSideStatus(100,'success','Pacote salvo.');}catch(error){UiUtil.setSideStatus(0,'error',UiUtil.actionableErrorMessage(error));}}
+    function requestDeletePackage(){var host=document.getElementById('pkgInlineMessage');if(!host)return;if(ParameterPanelModel.state.deleteConfirmId===ParameterPanelModel.state.selectedId){deletePackage_();return;}ParameterPanelModel.state.deleteConfirmId=ParameterPanelModel.state.selectedId;host.innerHTML='<div class="alert alert-warning py-2 small">Pacotes sem histórico podem ser removidos. Clique novamente em <strong>Excluir</strong>.</div>';}
+    async function deletePackage_(){try{UiUtil.setSideStatus(40,'info','Excluindo pacote.');ParameterPanelModel.state.context=await ApiClient.authenticatedCall('deleteParameterPackage',ParameterPanelModel.state.selectedId);ParameterPanelModel.reset();ParameterPanelView.render();UiUtil.setSideStatus(100,'success','Pacote excluído.');}catch(error){UiUtil.setSideStatus(0,'error',UiUtil.actionableErrorMessage(error));}}
+    function addRule(){var pkg=ParameterPanelModel.state.editingPackage,parameters=(ParameterPanelModel.state.context.parameters||[]).filter(function(p){return p.status==='ATIVO';}),fields=ParameterPanelModel.state.context.fields||[];if(!pkg||!parameters.length||!fields.length){UiUtil.setSideStatus(0,'warning','Cadastre ao menos um parâmetro ativo antes de criar regras.');return;}var field=fields.find(function(f){return !pkg.regime||(f.regimes||[]).indexOf(pkg.regime)>=0;})||fields[0];pkg.rules.push({id:'',connector:'E',field:field.key,parameterId:parameters[0].id,comparisonField:''});ParameterPanelView.renderPackageRules();}
+    return Object.freeze({init:init,open:open,changeTab:changeTab,editParameter:editParameter,newParameter:newParameter,editPackage:editPackage,newPackage:newPackage,back:back,saveParameter:saveParameter,requestDeleteParameter:requestDeleteParameter,savePackage:savePackage,requestDeletePackage:requestDeletePackage,addRule:addRule});
+  })();
+</script>

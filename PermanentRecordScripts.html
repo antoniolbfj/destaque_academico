@@ -1,0 +1,102 @@
+<script>
+  var PermanentRecordPanelController = (function () {
+    var state = { panel: null, type: '', context: null, armedId: '', armedUntil: 0 };
+
+    function init() {
+      state.panel = bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('sidePanel'), {
+        backdrop: true, keyboard: true, scroll: false
+      });
+      document.getElementById('menuOccurrences').addEventListener('click', function () { open('occurrences'); });
+    }
+
+    function preparePanel_(title) {
+      document.getElementById('sidePanelTitle').textContent = title;
+      document.getElementById('userPanelActions').hidden = true;
+      document.getElementById('prizePanelActions').hidden = true;
+      document.getElementById('parameterPanelActions').hidden = true;
+      document.getElementById('dataPanelActions').hidden = true;
+      document.getElementById('recordPanelActions').hidden = false;
+      document.getElementById('recordPanelActions').innerHTML = '<span class="text-secondary small">Exclusão física = reversão do registro.</span>';
+      state.panel.show();
+    }
+
+    async function open(type) {
+      if (!AppModel.state.permissions || !AppModel.state.permissions.canManageRecords) return;
+      state.type = type === 'occurrences' ? 'occurrences' : 'awardees';
+      state.armedId = '';
+      preparePanel_(state.type === 'awardees' ? 'Premiados' : 'Ocorrências');
+      document.getElementById('sidePanelContent').innerHTML = '<div class="p-3 text-secondary small">Carregando registros…</div>';
+      UiUtil.setSideStatus(18, 'info', 'Carregando registros permanentes.');
+      try {
+        state.context = state.type === 'awardees'
+          ? await ApiClient.authenticatedCall('getAwardeeAdminContext', {})
+          : await ApiClient.authenticatedCall('getOccurrenceAdminContext', {});
+        render_();
+        UiUtil.setSideStatus(100, 'success', String((state.context.records || []).length) + ' registro(s) encontrado(s).');
+      } catch (error) {
+        UiUtil.setSideStatus(0, 'error', UiUtil.actionableErrorMessage(error));
+      }
+    }
+
+    function contextLabel_(r) {
+      return r.regime === 'SEMESTRAL' ? r.regime + ' ' + r.year + '/' + r.semester : r.regime + ' ' + r.year;
+    }
+
+    function render_() {
+      var rows = state.context && state.context.records || [];
+      var host = document.getElementById('sidePanelContent');
+      if (!rows.length) {
+        host.innerHTML = '<div class="p-3 text-secondary small">Nenhum registro cadastrado.</div>';
+        return;
+      }
+      host.innerHTML = '<div class="record-admin-list">' + rows.map(function (r) {
+        var detail = state.type === 'awardees'
+          ? 'Prêmio: ' + UiUtil.escapeHtml(r.prize || '')
+          : 'Vigência: ' + UiUtil.escapeHtml(r.effectiveFrom || '') + (r.effectiveTo ? ' a ' + UiUtil.escapeHtml(r.effectiveTo) : ' — sem data de fim');
+        var extra = state.type === 'occurrences'
+          ? '<small>' + UiUtil.escapeHtml(r.justification || '') + '</small>'
+          : '<small>' +
+              (r.classificationIndicator ? UiUtil.escapeHtml(r.classificationIndicator) + ': ' + UiUtil.escapeHtml(r.classificationValue === null || r.classificationValue === undefined ? '—' : r.classificationValue) + ' · ' : '') +
+              'Média: ' + UiUtil.escapeHtml(r.average === null || r.average === undefined ? '—' : r.average) + ' · Frequência: ' + UiUtil.escapeHtml(r.frequency === null || r.frequency === undefined ? '—' : r.frequency) +
+              (r.position === null || r.position === undefined ? '' : ' · Posição: ' + UiUtil.escapeHtml(r.position)) +
+              (r.justification ? '<br>' + UiUtil.escapeHtml(r.justification) : '') + '</small>';
+        var armed = state.armedId === r.id && Date.now() <= state.armedUntil;
+        return '<article class="record-admin-card">' +
+          '<div class="record-admin-card-head"><div><strong>' + UiUtil.escapeHtml(r.name || '') + '</strong><small>' + UiUtil.escapeHtml(r.ra || '') + ' · ' + UiUtil.escapeHtml(contextLabel_(r)) + '</small></div>' +
+          '<button type="button" class="btn btn-sm ' + (armed ? 'btn-danger' : 'btn-outline-danger') + '" data-record-delete="' + UiUtil.escapeAttr(r.id) + '">' + (armed ? 'Confirmar' : 'Excluir') + '</button></div>' +
+          '<div class="record-admin-meta"><span>' + UiUtil.escapeHtml(r.status || '') + '</span><span>' + detail + '</span></div>' + extra +
+          (armed ? '<div class="record-delete-confirm">A exclusão reverte este registro permanentemente. Clique em <strong>Confirmar</strong> para prosseguir.</div>' : '') +
+        '</article>';
+      }).join('') + '</div>';
+      host.querySelectorAll('[data-record-delete]').forEach(function (button) {
+        button.addEventListener('click', function () { requestDelete_(button.dataset.recordDelete); });
+      });
+    }
+
+    async function requestDelete_(id) {
+      if (!id) return;
+      if (state.armedId !== id || Date.now() > state.armedUntil) {
+        state.armedId = id;
+        state.armedUntil = Date.now() + 6000;
+        render_();
+        UiUtil.setSideStatus(0, 'warning', 'Confirme a reversão do registro selecionado.');
+        return;
+      }
+      state.armedId = '';
+      state.armedUntil = 0;
+      UiUtil.setSideStatus(35, 'info', 'Revertendo registro.');
+      try {
+        state.context = state.type === 'awardees'
+          ? await ApiClient.authenticatedCall('deleteAwardee', id, {})
+          : await ApiClient.authenticatedCall('deleteOccurrence', id, {});
+        render_();
+        UiUtil.setSideStatus(100, 'success', 'Registro revertido por exclusão física.');
+        if (window.ApurationWorkspaceController) await ApurationWorkspaceController.refreshAfterPermanentRecordChange();
+      } catch (error) {
+        UiUtil.setSideStatus(0, 'error', UiUtil.actionableErrorMessage(error));
+      }
+    }
+
+    return Object.freeze({ init: init, open: open });
+  })();
+</script>

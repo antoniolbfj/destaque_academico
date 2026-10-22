@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <?!= include_('Styles'); ?>
+</head>
+<body>
+  <header id="publicHeader" class="app-header">
+    <div class="container-fluid app-shell d-flex align-items-center justify-content-between gap-3">
+      <div class="brand-wrap d-flex align-items-center gap-3">
+        <img class="institution-logo" src="<?= CONFIG.LOGO_URL ?>" alt="<?= CONFIG.INSTITUTION_NAME ?>">
+        <div>
+          <div class="institution-name"><?= CONFIG.INSTITUTION_NAME ?></div>
+          <div class="d-flex flex-wrap align-items-center gap-2"><h1 class="app-title mb-0"><?= CONFIG.APP_NAME ?></h1></div>
+        </div>
+      </div>
+      <button id="btnRestrictedAccess" type="button" class="public-access-btn"><i class="bi bi-person-lock me-1"></i>Área restrita</button>
+    </div>
+  </header>
+
+  <main id="publicAwardeeScreen" class="public-awardee-screen">
+    <div class="container-fluid app-shell public-awardee-shell">
+      <section class="public-awardee-hero">
+        <div>
+          <span class="public-kicker"><i class="bi bi-award-fill"></i> Reconhecimento acadêmico</span>
+          <h2 id="pubTitle">Premiados — Destaque Acadêmico</h2>
+          <p id="pubSubtitle">Conheça os estudantes reconhecidos pelo Destaque Acadêmico.</p>
+        </div>
+        <div class="public-total-card"><strong id="pubTotal">0</strong><span>premiações encontradas</span></div>
+      </section>
+      <section class="public-awardee-panel">
+        <div class="public-panel-head">
+          <div><strong>Premiados</strong><small>São exibidos apenas registros publicados ou homologados.</small></div>
+          <button id="pubReload" type="button" class="btn btn-sm btn-outline-success"><i class="bi bi-arrow-clockwise me-1"></i>Atualizar</button>
+        </div>
+        <div id="pubFilters" class="public-filters"></div>
+        <div id="pubLoading" class="public-loading"><span class="spinner-border spinner-border-sm text-success"></span><span>Carregando premiados…</span></div>
+        <div id="pubContent" hidden></div>
+      </section>
+      <div class="public-footnote"><i class="bi bi-shield-check"></i><span>A área pública apresenta somente as informações selecionadas pela administração do sistema.</span></div>
+    </div>
+  </main>
+
+  <main id="loginScreen" class="login-screen" hidden>
+    <div class="container-fluid app-shell py-5">
+      <div class="login-layout">
+        <section class="login-intro">
+          <span class="login-kicker"><i class="bi bi-code-square"></i> <?= CONFIG.APP_MODE_LABEL ?></span>
+          <h2>Ambiente de desenvolvimento.</h2>
+          <p>Acesso protegido para testes da Mesa de Apuração, gerenciamento dos dados temporários e cadastros administrativos.</p>
+          <div class="login-feature-list">
+            <div><i class="bi bi-shield-check"></i><span><strong>Acesso protegido</strong><small>Código temporário enviado ao e-mail cadastrado.</small></span></div>
+            <div><i class="bi bi-table"></i><span><strong>Mesa de apuração</strong><small>Dados consolidados por RA, critérios parametrizáveis e decisões em lote.</small></span></div>
+          </div>
+        </section>
+        <section class="login-card" aria-labelledby="loginTitle">
+          <div class="login-card-icon"><i class="bi bi-person-lock"></i></div>
+          <h2 id="loginTitle">Área restrita</h2>
+          <p class="text-secondary">Informe seu e-mail cadastrado. Você receberá um código de acesso com 6 dígitos.</p>
+          <div><label for="loginEmail" class="form-label normal-label">E-mail</label><input id="loginEmail" class="form-control form-control-lg" type="email" autocomplete="email" placeholder="nome@iftm.edu.br"></div>
+          <div id="loginCodeStep" class="mt-3" hidden><label for="loginCode" class="form-label normal-label">Código de 6 dígitos</label><input id="loginCode" class="form-control login-code-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000"><div class="form-text">O código expira em 10 minutos.</div></div>
+          <div id="loginMessage" class="alert alert-light border mt-3 mb-0 d-none" role="status"></div>
+          <div class="login-actions mt-4"><button id="btnBackToPublic" type="button" class="btn btn-outline-secondary btn-lg">Voltar aos premiados</button><button id="btnSendLoginCode" type="button" class="btn btn-outline-success btn-lg">Enviar código</button><button id="btnVerifyLoginCode" type="button" class="btn btn-success btn-lg" hidden>Entrar</button></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <main id="startupScreen" class="startup-screen" hidden aria-live="polite" aria-busy="true">
+    <div class="container-fluid app-shell startup-shell">
+      <section id="startupCard" class="startup-card" data-startup-state="loading" aria-labelledby="startupTitle">
+        <div class="startup-heading"><div class="startup-spinner" aria-hidden="true"><span></span></div><div><span class="startup-kicker"><?= CONFIG.APP_MODE_LABEL ?></span><h2 id="startupTitle">Carregando o sistema</h2><p id="startupMessage">Validando a sessão e preparando a aplicação.</p></div></div>
+        <ol class="startup-stages" aria-label="Etapas de inicialização">
+          <li data-startup-stage="session" class="is-active"><span class="startup-stage-icon"><i class="bi bi-arrow-repeat"></i></span><span><strong>Validando sessão</strong><small>Confirmando o usuário autenticado.</small></span></li>
+          <li data-startup-stage="permissions"><span class="startup-stage-icon"><i class="bi bi-circle"></i></span><span><strong>Carregando permissões</strong><small>Aplicando o perfil do usuário.</small></span></li>
+          <li data-startup-stage="interface"><span class="startup-stage-icon"><i class="bi bi-circle"></i></span><span><strong>Preparando interface</strong><small>Carregando a Mesa de Apuração.</small></span></li>
+          <li data-startup-stage="finalize"><span class="startup-stage-icon"><i class="bi bi-circle"></i></span><span><strong>Finalizando</strong><small>Liberando o ambiente de desenvolvimento.</small></span></li>
+        </ol>
+        <div class="startup-progress-wrap"><div class="startup-progress-meta"><span id="startupDetail">Validando sessão…</span><strong id="startupPercent">10%</strong></div><div class="progress startup-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="10"><div id="startupProgressBar" class="progress-bar" style="width:10%"></div></div><div class="startup-foot"><span>Carregamento progressivo dos componentes essenciais.</span><span id="startupElapsed">Tempo decorrido: 0 s</span></div></div>
+        <button id="startupRetry" type="button" class="btn btn-outline-danger startup-retry" hidden><i class="bi bi-arrow-clockwise me-1"></i>Tentar novamente</button>
+      </section>
+    </div>
+  </main>
+
+  <div id="authenticatedShell" class="auth-shell" hidden>
+    <aside id="appSidebar" class="app-sidebar">
+      <div class="app-sidebar-inner">
+        <div class="sidebar-brand"><img src="<?= CONFIG.LOGO_URL ?>" alt=""><div><strong>Destaque Acadêmico</strong><small><?= CONFIG.APP_MODE_LABEL ?></small></div></div>
+        <div class="sidebar-section">Trabalho</div>
+        <button id="menuApuration" type="button" class="sidebar-item is-active"><i class="bi bi-grid-1x2-fill"></i><span>Mesa de apuração</span></button>
+        <button id="menuManageData" type="button" class="sidebar-item" hidden><i class="bi bi-database-gear"></i><span>Gerenciar Dados</span></button>
+        <div class="sidebar-section">Cadastros</div>
+        <button id="menuPrizes" type="button" class="sidebar-item" hidden><i class="bi bi-award"></i><span>Prêmios</span></button>
+        <button id="menuParameters" type="button" class="sidebar-item" hidden><i class="bi bi-sliders"></i><span>Parâmetros</span></button>
+        <div class="sidebar-section">Registros</div>
+        <button id="menuAwardees" type="button" class="sidebar-item" hidden><i class="bi bi-trophy"></i><span>Premiados</span></button>
+        <button id="menuManualAwardees" type="button" class="sidebar-item sidebar-subitem" hidden><i class="bi bi-pencil-square"></i><span>Cadastro manual</span><small>Excepcional</small></button>
+        <button id="menuAwardeeReports" type="button" class="sidebar-item sidebar-subitem" hidden><i class="bi bi-file-earmark-bar-graph"></i><span>Relatórios</span><small>Flexível</small></button>
+        <button id="menuOccurrences" type="button" class="sidebar-item" hidden><i class="bi bi-exclamation-diamond"></i><span>Ocorrências</span></button>
+        <div class="sidebar-section">Administração</div>
+        <button id="menuPublicPortal" type="button" class="sidebar-item" hidden><i class="bi bi-globe2"></i><span>Página pública</span></button>
+        <button id="menuUsers" type="button" class="sidebar-item" hidden><i class="bi bi-people"></i><span>Usuários</span></button>
+      </div>
+    </aside>
+
+    <div class="auth-main">
+      <header class="auth-topbar">
+        <div class="d-flex align-items-center gap-2"><button id="btnToggleSidebar" class="auth-hamburger" type="button" title="Ocultar ou exibir menu"><i class="bi bi-list"></i></button><span class="auth-breadcrumb">Destaque Acadêmico / <strong id="activeSectionTitle">Mesa de apuração</strong></span></div>
+        <button id="authIdentityButton" type="button" class="auth-user-button" hidden title="Encerrar sessão"><span class="auth-user-avatar"><i class="bi bi-person-fill"></i></span><span class="auth-user-copy"><strong id="authUserName"></strong><small id="authUserProfile"></small></span><i class="bi bi-box-arrow-right auth-user-chevron"></i></button>
+      </header>
+
+      <main id="mainContent" class="apuration-workspace" hidden>
+        <section id="apurationSticky" class="apuration-sticky">
+          <div class="apuration-context-row">
+            <div class="ap-field ap-year-field"><label>Ano</label><select id="apYear" class="ap-control"></select></div>
+            <div class="ap-field ap-dataset-field"><label>Conjunto em análise</label><select id="apDataset" class="ap-control"></select></div>
+            <div class="ap-field ap-reference-field"><label>Data de referência</label><input id="apReferenceDate" type="date" class="ap-control"></div>
+            <div class="ap-field ap-package-field"><label>Pacote de critérios</label><select id="apCriteriaPackage" class="ap-control"><option value="">Sem critérios</option></select></div>
+            <div class="ap-kpis" aria-label="Resumo do conjunto"><span><strong id="apRows">0</strong><small>linhas</small></span><span><strong id="apRas">0</strong><small>RAs</small></span><span><strong id="apPrizeCount">0</strong><small>prêmios</small></span><span><strong id="apOccurrenceCount">0</strong><small>ocorrências</small></span></div>
+          </div>
+          <div class="ap-state-row">
+            <div class="ap-state-zone"><div id="apStateStepper" class="ap-state-stepper"></div><div id="apStateCaption" class="ap-state-caption"></div></div>
+            <div class="ap-state-actions"><button id="apTransition" type="button" class="ap-transition" hidden></button><span id="apSaveState" class="ap-save-state"><i class="bi bi-check-circle-fill"></i><span>Tudo salvo</span></span><button id="apReviewPending" type="button" class="ap-small-btn" hidden>Revisar</button><button id="apSavePending" type="button" class="ap-small-btn ap-small-btn-primary" hidden>Salvar decisões</button></div>
+          </div>
+          <div id="apPendingPanel" class="ap-pending-panel" hidden><div class="ap-pending-head"><strong>Decisões pendentes</strong><button id="apClosePending" type="button" class="ap-icon-btn"><i class="bi bi-x-lg"></i></button></div><div id="apPendingList"></div></div>
+        </section>
+
+        <section class="ap-content">
+          <div id="apMessage" class="ap-inline-message" hidden></div>
+          <div id="apTransitionProgress" class="ap-batch-progress" hidden aria-busy="false">
+            <div class="ap-batch-header"><div role="status" aria-live="polite"><strong id="apBatchTitle"></strong><div id="apBatchDetail"></div></div><button id="apCloseTransitionProgress" type="button" class="ap-icon-btn" aria-label="Fechar progresso concluído" title="Fechar" hidden>×</button></div>
+            <progress id="apBatchBar" max="100" value="0" aria-label="Progresso do processamento"></progress>
+            <div class="ap-batch-footer"><span id="apBatchActivity"></span><button id="apResumeTransition" type="button" class="ap-small-btn ap-small-btn-primary" hidden>Retomar processamento</button></div>
+          </div>
+          <section class="ap-filters">
+            <div class="ap-field ap-search-field"><label>Pesquisar</label><div class="ap-search"><i class="bi bi-search"></i><input id="apSearch" class="ap-control" placeholder="Nome, RA ou curso"></div></div>
+            <div class="ap-field"><label>Campo principal</label><select id="apMetric" class="ap-control"></select></div>
+            <div class="ap-field"><label>Agrupar por</label><select id="apGroup" class="ap-control"></select></div>
+            <div class="ap-field"><label>Período</label><select id="apPeriod" class="ap-control"><option value="">Todos</option></select></div>
+            <div class="ap-field"><label>Filtro complementar</label><select id="apExtra" class="ap-control"><option value="">Todos</option></select></div>
+            <button id="apClearFilters" type="button" class="ap-clear-btn">Limpar</button>
+          </section>
+          <section class="ap-table-card"><div class="ap-table-head"><div><strong id="apTableTitle">Mesa de classificação</strong><small id="apTableMeta"></small></div><span id="apCriteriaSummary" class="ap-criteria-summary"></span></div><div id="apTableHost" class="ap-table-wrap"></div><div id="apTableFooter" class="ap-table-footer"></div></section>
+        </section>
+      </main>
+
+      <main id="awardeeWorkspace" class="awardee-workspace" hidden>
+        <section id="awSticky" class="aw-sticky">
+          <div class="aw-context-row">
+            <div class="ap-field"><label>De</label><select id="awFromYear" class="ap-control"></select></div>
+            <div class="ap-field"><label>Até</label><select id="awToYear" class="ap-control"></select></div>
+            <div class="ap-field aw-prize-field"><label>Tipo de prêmio</label><select id="awPrizeFilter" class="ap-control"><option value="">Todos os prêmios</option></select></div>
+            <div class="ap-field"><label>Regime</label><select id="awRegimeFilter" class="ap-control"><option value="">Todos</option></select></div>
+            <div class="aw-kpis"><span><strong id="awAwardCount">0</strong><small>premiações</small></span><span><strong id="awStudentCount">0</strong><small>alunos</small></span><span><strong id="awTypeCount">0</strong><small>tipos</small></span><span><strong id="awDraftCount">0</strong><small>em apuração</small></span></div>
+          </div>
+          <div class="aw-state-row">
+            <div class="aw-state-zone"><div id="awStateStepper" class="ap-state-stepper"></div><div id="awStateCaption" class="ap-state-caption"></div></div>
+            <div class="aw-state-actions"><button id="awTransition" type="button" class="ap-transition" hidden></button><span id="awSaveState" class="ap-save-state"><i class="bi bi-check-circle-fill"></i><span>Tudo salvo</span></span><button id="awReviewPending" type="button" class="ap-small-btn" hidden>Revisar</button><button id="awSavePending" type="button" class="ap-small-btn ap-small-btn-primary" hidden>Salvar premiações</button></div>
+          </div>
+          <div id="awPendingPanel" class="ap-pending-panel" hidden><div class="ap-pending-head"><strong>Prêmios complementares em apuração</strong><button id="awClosePending" type="button" class="ap-icon-btn"><i class="bi bi-x-lg"></i></button></div><div id="awPendingList"></div></div>
+        </section>
+
+        <section class="aw-content">
+          <div id="awMessage" class="ap-inline-message" hidden></div>
+          <div class="aw-concept-note"><strong>Premiados já consolidados = base de análise.</strong> Esta mesa permite conceder prêmios complementares sem alterar os registros que originaram a análise. A escolha de quem será premiado pertence ao usuário.</div>
+
+          <div id="awListView">
+            <section class="aw-filters">
+              <div class="ap-field aw-search-field"><label>Pesquisar</label><div class="ap-search"><i class="bi bi-search"></i><input id="awSearch" class="ap-control" placeholder="Nome, RA, curso ou prêmio"></div></div>
+              <div class="ap-field"><label>Visualização</label><div class="aw-segment"><button id="awModeRecords" type="button" class="is-active">Registros</button><button id="awModeStudents" type="button">Por aluno</button></div></div>
+              <div class="ap-field"><label>Curso</label><select id="awCourseFilter" class="ap-control"><option value="">Todos os cursos</option></select></div>
+              <div class="ap-field"><label>Período / turma</label><select id="awPeriodClassFilter" class="ap-control"><option value="">Todos</option></select></div>
+              <div class="ap-field"><label>Agrupar por</label><select id="awGroup" class="ap-control"><option value="">Nenhum</option><option value="student">Aluno</option><option value="course">Curso</option><option value="prize">Prêmio</option><option value="year">Ano</option><option value="periodClass">Período / turma</option></select></div>
+              <div class="ap-field"><label>Ordenar por</label><select id="awSort" class="ap-control"><option value="date">Mais recente</option><option value="count">Mais premiações</option><option value="avg">Maior média</option><option value="freq">Maior frequência</option><option value="name">Nome</option></select></div>
+              <button id="awClearFilters" type="button" class="ap-clear-btn">Limpar</button>
+            </section>
+            <section class="aw-table-card"><div class="aw-table-head"><div><strong id="awTableTitle">Registros de premiação</strong><small id="awTableMeta"></small></div><span class="aw-readonly-note"><i class="bi bi-lock-fill"></i> Histórico somente leitura</span></div><div id="awTableHost" class="aw-table-wrap"></div><div id="awTableFooter" class="ap-table-footer">A ferramenta organiza os dados; a decisão de concessão é do usuário.</div></section>
+          </div>
+
+          <div id="awAnalysisView" class="aw-analysis-view" hidden>
+            <div class="aw-analysis-nav"><button id="awBack" type="button" class="aw-back"><i class="bi bi-arrow-left"></i> Voltar para Premiados</button><div class="aw-analysis-title"><strong id="awStudentName"></strong><small id="awStudentMeta"></small></div><span class="aw-analysis-badge">Análise do histórico</span></div>
+            <div id="awSummary" class="aw-summary-grid"></div>
+            <div class="aw-analysis-grid">
+              <section class="aw-section"><div class="aw-section-head"><div><strong>Histórico de premiações</strong><small>Registros já consolidados. Não podem ser alterados nesta mesa.</small></div></div><div id="awHistoryHost" class="aw-history"></div></section>
+              <section class="aw-section"><div class="aw-section-head"><div><strong>Conceder prêmio complementar</strong><small>O novo registro entra em EM APURAÇÃO até a publicação.</small></div></div><div id="awAwardEditor"></div></section>
+            </div>
+          </div>
+        </section>
+      </main>
+
+
+      <main id="manualAwardeeWorkspace" class="manual-awardee-workspace" hidden>
+        <section class="manual-awardee-sticky">
+          <div class="manual-awardee-title"><div><h2>Cadastro manual de premiados</h2><p>CRUD administrativo para prêmios extraordinários concedidos fora do fluxo regular da Mesa de Apuração.</p></div><button id="manNew" type="button" class="btn btn-success btn-sm"><i class="bi bi-plus-circle me-1"></i>Novo premiado</button></div>
+        </section>
+        <section class="manual-awardee-content">
+          <div id="manMessage" class="ap-inline-message" hidden></div>
+          <div class="manual-exception-note"><i class="bi bi-exclamation-triangle-fill"></i><div><strong>Uso excepcional e rastreável.</strong><span>Somente prêmios da categoria Extraordinário aparecem nesta tela. A origem é gravada automaticamente como CADASTRO_MANUAL e a justificativa é obrigatória.</span></div></div>
+          <div class="manual-kpi-grid"><div><small>Registros</small><strong id="manTotal">0</strong></div><div><small>Em apuração</small><strong id="manUnderReview">0</strong></div><div><small>Publicados</small><strong id="manPublished">0</strong></div><div><small>Homologados</small><strong id="manApproved">0</strong></div></div>
+          <section class="manual-filter-row">
+            <div class="ap-field manual-search-field"><label>Pesquisar</label><div class="ap-search"><i class="bi bi-search"></i><input id="manSearch" class="ap-control" placeholder="Nome, RA, curso ou prêmio"></div></div>
+            <div class="ap-field"><label>Ano</label><select id="manYearFilter" class="ap-control"><option value="">Todos</option></select></div>
+            <div class="ap-field"><label>Prêmio</label><select id="manPrizeFilter" class="ap-control"><option value="">Todos</option></select></div>
+            <div class="ap-field"><label>Situação</label><select id="manStatusFilter" class="ap-control"><option value="">Todas</option></select></div>
+            <div class="ap-field"><label>Regime</label><select id="manRegimeFilter" class="ap-control"><option value="">Todos</option></select></div>
+            <button id="manClear" type="button" class="ap-clear-btn">Limpar</button>
+          </section>
+          <section class="manual-table-card"><div class="manual-table-head"><div><strong>Premiações extraordinárias cadastradas manualmente</strong><small id="manMeta"></small></div><span class="manual-origin-chip">CADASTRO_MANUAL</span></div><div id="manTableHost" class="manual-table-wrap"></div><div class="ap-table-footer">Registros publicados ou homologados são históricos. A exclusão física é permitida apenas enquanto a premiação estiver EM APURAÇÃO.</div></section>
+        </section>
+      </main>
+
+      <main id="awardeeReportWorkspace" class="report-workspace" hidden>
+        <section class="report-head">
+          <div class="report-head-row">
+            <div class="report-title"><h2>Construtor de relatórios de premiados <span class="report-version-badge">V2.2</span></h2><p>Monte o espelho desejado escolhendo campos, filtros, agrupamentos e ordenação.</p></div>
+            <div class="report-head-actions"><button id="repNew" type="button" class="report-btn">Novo</button><button id="repMyModels" type="button" class="report-btn">Meus modelos</button><button id="repSaveModel" type="button" class="report-btn">Salvar modelo</button><button id="repGenerate" type="button" class="report-btn primary">Gerar relatório</button></div>
+          </div>
+        </section>
+        <section class="report-body">
+          <aside class="report-builder">
+            <div class="builder-top">
+              <div class="builder-name-row"><input id="repName" class="builder-name" value="Relatório geral de premiados — completo" aria-label="Nome do relatório"><button id="repDuplicate" class="report-btn" type="button">Duplicar</button></div>
+              <div class="report-model-row"><select id="repModelSelect" class="report-control" aria-label="Modelo de relatório"></select><button id="repApplyModel" class="report-btn" type="button">Aplicar modelo</button></div>
+              <div class="report-model-help">O modelo salva somente a configuração: campos, filtros, agrupamento e ordenação. Os dados são consultados novamente a cada abertura.</div>
+            </div>
+            <div class="builder-tabs"><button class="builder-tab is-active" data-rep-tab="fields" type="button">1. Campos</button><button class="builder-tab" data-rep-tab="filters" type="button">2. Filtros</button><button class="builder-tab" data-rep-tab="organize" type="button">3. Organização</button></div>
+            <div class="builder-scroll">
+              <section id="repPanelFields" class="builder-panel is-active">
+                <div class="builder-note"><strong>Escolha exatamente o que aparecerá no relatório.</strong> Campos de auditoria e IDs também podem ser incluídos quando o objetivo for conferir o espelho da base.</div>
+                <div class="builder-section"><div class="builder-section-head"><strong>Campos disponíveis</strong><div class="mini-actions"><button id="repSelectAll" class="mini-btn" type="button">Todos</button><button id="repSelectNone" class="mini-btn" type="button">Nenhum</button></div></div><div id="repFieldOptions"></div></div>
+                <div class="builder-section"><div class="builder-section-head"><strong>Ordem das colunas</strong><small>Use ↑ e ↓</small></div><div id="repSelectedFields" class="selected-list"></div></div>
+              </section>
+              <section id="repPanelFilters" class="builder-panel">
+                <div class="builder-note">Combine quantos filtros forem necessários. As condições são conectadas por <strong>E</strong>.</div><div id="repFilterList" class="filter-list"></div><button id="repAddFilter" class="add-row-btn" type="button">+ Adicionar filtro</button>
+              </section>
+              <section id="repPanelOrganize" class="builder-panel">
+                <div class="builder-section"><div class="builder-section-head"><strong>Agrupamento visual</strong><small>Opcional</small></div><div class="organize-grid"><div><label class="field-group-title report-top-label">1º agrupamento</label><select id="repGroup1" class="report-control"></select></div><div><label class="field-group-title report-top-label">2º agrupamento</label><select id="repGroup2" class="report-control"></select></div></div><label class="builder-check"><input id="repShowGroupRows" type="checkbox" checked><span>Exibir separadores entre os grupos no relatório.</span></label></div>
+                <div class="builder-section"><div class="builder-section-head"><strong>Ordenação</strong><small>Até dois níveis</small></div><div class="organize-grid"><select id="repSort1" class="report-control"></select><select id="repDir1" class="report-control"><option value="asc">Crescente</option><option value="desc">Decrescente</option></select><select id="repSort2" class="report-control"></select><select id="repDir2" class="report-control"><option value="asc">Crescente</option><option value="desc">Decrescente</option></select></div></div>
+                <div class="builder-section"><div class="builder-section-head"><strong>Apresentação</strong><small>Sem alterar os dados</small></div><label class="builder-check"><input id="repRawHeaders" type="checkbox"><span><strong>Modo espelho da base:</strong> usar nomes técnicos como <code>ORIGEM_CONCESSÃO</code>.</span></label><label class="builder-check"><input id="repRepeatHeader" type="checkbox" checked><span>Repetir cabeçalho em páginas impressas/PDF.</span></label><label class="builder-check"><input id="repShowTitle" type="checkbox" checked><span>Exibir título e resumo dos filtros na emissão.</span></label></div>
+              </section>
+            </div>
+            <div class="builder-bottom"><div id="repBuilderSummary" class="builder-summary"></div><button id="repClearConfig" class="report-btn danger-lite" type="button">Limpar</button></div>
+          </aside>
+          <section class="report-preview">
+            <div class="preview-toolbar"><div class="preview-title"><strong id="repPreviewTitle">Relatório geral de premiados — completo</strong><small id="repPreviewSubtitle">Prévia dinâmica do resultado</small></div><div class="preview-tools"><span id="repRawBadge" class="raw-mode-badge" hidden>ESPELHO DA BASE</span><select id="repPageSize" class="view-toggle"><option value="20">20 linhas</option><option value="50">50 linhas</option><option value="99999">Todas na prévia</option></select></div></div>
+            <div class="preview-kpis"><div class="preview-kpi"><small>Registros encontrados</small><strong id="repKpiRecords">0</strong></div><div class="preview-kpi"><small>Colunas</small><strong id="repKpiColumns">0</strong></div><div class="preview-kpi"><small>Filtros ativos</small><strong id="repKpiFilters">0</strong></div><div class="preview-kpi"><small>Agrupamento</small><strong id="repKpiGroups">Nenhum</strong></div></div>
+            <div id="repPreviewArea" class="preview-area"><div class="preview-empty"><div><span class="spinner-border spinner-border-sm me-2"></span>Carregando dados...</div></div></div>
+            <div class="preview-footer"><span id="repPreviewFooterText">Os dados são lidos diretamente dos registros de premiados.</span><div class="export-actions"><button id="repExportCsv" class="export-btn" type="button">CSV</button><button id="repExportXlsx" class="export-btn" type="button">Planilha</button><button id="repPrint" class="export-btn" type="button">PDF / imprimir</button><button id="repEmit" class="export-btn primary" type="button">Emitir</button></div></div>
+          </section>
+        </section>
+      </main>
+
+      <main id="publicPortalConfigWorkspace" class="public-config-workspace" hidden>
+        <section class="public-config-head">
+          <div><span class="public-config-kicker">Administração</span><h2>Configurar página pública de premiados</h2><p>Defina quais informações podem ser vistas sem login e a ordem em que serão apresentadas.</p></div>
+          <div class="public-config-actions"><button id="pubCfgSelectDefault" type="button" class="btn btn-outline-secondary btn-sm">Restaurar campos padrão</button><button id="pubCfgSave" type="button" class="btn btn-success btn-sm"><i class="bi bi-check2-circle me-1"></i>Salvar configuração</button></div>
+        </section>
+        <section class="public-config-body">
+          <div id="pubCfgMessage" class="ap-inline-message" hidden></div>
+          <div class="public-config-grid">
+            <section class="public-config-card">
+              <div class="public-config-section-title"><strong>Publicação</strong><small>Controle geral da página</small></div>
+              <label class="public-config-toggle"><input id="pubCfgEnabled" type="checkbox"><span><strong>Exibir página pública</strong><small>Quando desativada, nenhum registro é apresentado ao visitante.</small></span></label>
+              <label class="public-config-field"><span>Título</span><input id="pubCfgTitle" class="form-control" maxlength="120"></label>
+              <label class="public-config-field"><span>Texto de apresentação</span><textarea id="pubCfgSubtitle" class="form-control" rows="3" maxlength="300"></textarea></label>
+              <div class="public-config-note"><i class="bi bi-shield-lock"></i><span>Somente registros <strong>PUBLICADOS</strong> ou <strong>HOMOLOGADOS</strong> podem aparecer. Campos administrativos, RA, justificativas, e-mails e IDs não são oferecidos para publicação.</span></div>
+            </section>
+            <section class="public-config-card">
+              <div class="public-config-section-title"><strong>Informações disponíveis</strong><small>Marque o que será público</small></div>
+              <div id="pubCfgAvailable" class="public-config-options"></div>
+            </section>
+            <section class="public-config-card">
+              <div class="public-config-section-title"><strong>Ordem das informações</strong><small>Use ↑ e ↓</small></div>
+              <div id="pubCfgSelected" class="public-config-selected-list"></div>
+            </section>
+          </div>
+          <section class="public-config-preview">
+            <div class="public-config-preview-head"><div><span>Prévia</span><strong id="pubCfgPreviewTitle">Premiados — Destaque Acadêmico</strong><small id="pubCfgPreviewSubtitle"></small></div><span id="pubCfgPreviewStatus" class="public-config-status">PUBLICAÇÃO ATIVA</span></div>
+            <div id="pubCfgPreviewTable"></div>
+          </section>
+        </section>
+      </main>
+
+    </div>
+  </div>
+
+  <section id="awardeeReportPrintSheet" class="report-print-sheet" aria-hidden="true"></section>
+
+  <div class="offcanvas offcanvas-end app-side-panel" tabindex="-1" id="sidePanel" aria-labelledby="sidePanelTitle">
+    <div class="offcanvas-header side-panel-header"><div><span class="side-panel-kicker">Administração</span><h2 id="sidePanelTitle" class="offcanvas-title fs-5">Administração</h2></div><button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Fechar"></button></div>
+    <div class="side-panel-layout">
+      <section id="sidePanelStatus" class="side-panel-status" aria-live="polite"><div class="status-summary"><span id="sideStatusIcon" class="status-icon"><i class="bi bi-info-circle"></i></span><div class="side-status-copy"><strong id="sideStatusPercent" class="status-percent">0%</strong><span id="sideStatusText">Selecione uma ação.</span></div></div><div class="progress status-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div id="sideProgressBar" class="progress-bar" style="width:0%"></div></div></section>
+      <section id="userPanelActions" class="side-panel-actions" aria-label="Ações de usuários"><button id="btnUserNew" type="button" class="btn btn-outline-secondary btn-sm"><i class="bi bi-person-plus me-1"></i>Novo usuário</button><button id="btnUserDelete" type="button" class="btn btn-outline-danger btn-sm" disabled><i class="bi bi-trash me-1"></i>Excluir</button><button id="btnUserSave" type="button" class="btn btn-success btn-sm" disabled><i class="bi bi-check2-circle me-1"></i>Salvar</button></section>
+      <section id="prizePanelActions" class="side-panel-actions" aria-label="Ações de prêmios" hidden><button id="btnPrizeNew" type="button" class="btn btn-outline-secondary btn-sm"><i class="bi bi-plus-circle me-1"></i>Novo prêmio</button><button id="btnPrizeDelete" type="button" class="btn btn-outline-danger btn-sm" disabled><i class="bi bi-trash me-1"></i>Excluir</button><button id="btnPrizeSave" type="button" class="btn btn-success btn-sm" disabled><i class="bi bi-check2-circle me-1"></i>Salvar</button></section>
+      <section id="parameterPanelActions" class="side-panel-actions" aria-label="Ações de parâmetros" hidden><button id="btnParameterNew" type="button" class="btn btn-outline-secondary btn-sm"><i class="bi bi-plus-circle me-1"></i>Novo parâmetro</button><button id="btnPackageNew" type="button" class="btn btn-outline-secondary btn-sm"><i class="bi bi-box-seam me-1"></i>Novo pacote</button></section>
+      <section id="dataPanelActions" class="side-panel-actions" aria-label="Ações de gerenciamento de dados" hidden></section>
+      <section id="recordPanelActions" class="side-panel-actions" aria-label="Ações de registros permanentes" hidden></section>
+      <div id="sidePanelContent" class="side-panel-content"></div>
+    </div>
+  </div>
+
+  <div id="apStudentBackdrop" class="ap-drawer-backdrop" hidden></div>
+  <aside id="apStudentDrawer" class="ap-student-drawer" aria-hidden="true">
+    <div class="ap-drawer-head"><div><strong id="apStudentName"></strong><small id="apStudentSubtitle"></small></div><button id="apStudentClose" type="button" class="ap-icon-btn"><i class="bi bi-x-lg"></i></button></div>
+    <div class="ap-drawer-body"><div id="apStudentSummary" class="ap-student-summary"></div><section id="apStudentCriteria" class="ap-student-criteria" aria-label="Verificação dos critérios"></section><div id="apStudentExisting"></div><div class="ap-drawer-tabs"><button data-ap-tab="academic" class="is-active">Dados acadêmicos</button><button data-ap-tab="decision">Registrar decisão</button></div><div id="apAcademicTab" class="ap-tab-panel is-active"><div id="apStudentDetails" class="ap-student-details"></div></div><div id="apDecisionTab" class="ap-tab-panel"><div id="apPrizeEditor"></div><div id="apOccurrenceEditor"></div></div></div>
+  </aside>
+
+
+  <div id="manBackdrop" class="ap-drawer-backdrop" hidden></div>
+  <aside id="manDrawer" class="manual-awardee-drawer" aria-hidden="true">
+    <div class="ap-drawer-head"><div><strong id="manDrawerTitle">Novo premiado</strong><small id="manDrawerSubtitle">Premiação extraordinária · origem CADASTRO_MANUAL</small></div><button id="manClose" type="button" class="ap-icon-btn"><i class="bi bi-x-lg"></i></button></div>
+    <div class="manual-drawer-body">
+      <div id="manFormError" class="manual-form-error" hidden></div>
+      <section class="manual-form-section"><div class="manual-form-section-title"><strong>1. Estudante</strong><small>Localize pelo RA sempre que possível</small></div>
+        <div class="manual-field"><label>RA <b>*</b></label><div class="manual-lookup-row"><input id="manRa" class="form-control" placeholder="RA do estudante"><button id="manLookup" type="button" class="btn btn-outline-success btn-sm">Localizar</button></div></div>
+        <div id="manFound" class="manual-found" hidden></div>
+        <label class="manual-check"><input id="manManualStudent" type="checkbox"><span>Estudante não localizado. Liberar preenchimento manual dos dados cadastrais.</span></label>
+        <div class="manual-form-grid mt-2"><div class="manual-field span-2"><label>Nome <b>*</b></label><input id="manName" class="form-control" readonly></div><div class="manual-field span-2"><label>Curso</label><input id="manCourse" class="form-control" readonly></div><div class="manual-field"><label>Período</label><input id="manCoursePeriod" class="form-control" readonly></div><div class="manual-field"><label>Turma</label><input id="manClassGroup" class="form-control" readonly></div></div>
+      </section>
+      <section class="manual-form-section"><div class="manual-form-section-title"><strong>2. Premiação extraordinária</strong><small>Prêmio deve estar cadastrado como Extraordinário</small></div>
+        <div class="manual-form-grid"><div class="manual-field span-2"><label>Prêmio <b>*</b></label><select id="manPrize" class="form-select"></select></div><div class="manual-field"><label>Ano <b>*</b></label><input id="manYear" class="form-control" type="number" min="1900" max="2200"></div><div class="manual-field"><label>Regime <b>*</b></label><select id="manRegime" class="form-select"></select></div><div id="manSemesterWrap" class="manual-field"><label>Semestre <b>*</b></label><select id="manSemester" class="form-select"><option value="">Selecione</option><option value="1">1º</option><option value="2">2º</option></select></div><div class="manual-field"><label>Situação</label><select id="manStatus" class="form-select"></select></div><div class="manual-field span-2"><label>Justificativa <b>*</b></label><textarea id="manJustification" class="form-control" rows="4" placeholder="Fundamento da concessão excepcional"></textarea></div><div class="manual-field span-2"><label>Referência administrativa</label><input id="manReference" class="form-control" placeholder="Portaria, ata, processo, deliberação..."></div></div>
+      </section>
+      <section class="manual-form-section"><div class="manual-form-section-title"><strong>3. Auditoria</strong><small>Preenchimento automático</small></div><div id="manAudit" class="manual-audit-grid"></div></section>
+    </div>
+    <div class="manual-drawer-foot"><button id="manDelete" type="button" class="btn btn-outline-danger btn-sm" hidden>Excluir registro</button><div><button id="manCancel" type="button" class="btn btn-outline-secondary btn-sm">Cancelar</button><button id="manSave" type="button" class="btn btn-success btn-sm">Salvar</button></div></div>
+  </aside>
+
+  <div id="apGuard" class="ap-guard" hidden><strong id="apGuardTitle"></strong><p id="apGuardText"></p><div><button id="apGuardDiscard" class="ap-small-btn">Descartar</button><button id="apGuardSave" class="ap-small-btn ap-small-btn-primary">Salvar agora</button></div></div>
+  <div id="awGuard" class="ap-guard" hidden><strong id="awGuardTitle"></strong><p id="awGuardText"></p><div><button id="awGuardCancel" class="ap-small-btn">Voltar</button><button id="awGuardSave" class="ap-small-btn ap-small-btn-primary">Salvar agora</button></div></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <?!= include_('Scripts'); ?>
+  <?!= include_('UserScripts'); ?>
+  <?!= include_('PrizeScripts'); ?>
+  <?!= include_('ParameterScripts'); ?>
+  <?!= include_('DataImportScripts'); ?>
+  <?!= include_('PermanentRecordScripts'); ?>
+  <?!= include_('AwardeeWorkspaceScripts'); ?>
+  <?!= include_('ManualAwardeeScripts'); ?>
+  <?!= include_('AwardeeReportScripts'); ?>
+  <?!= include_('PublicAwardeeScripts'); ?>
+  <?!= include_('ApurationScripts'); ?>
+</body>
+</html>

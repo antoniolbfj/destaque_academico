@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    :root{--green:#0c5a36;--green2:#174c37;--line:#dce5e0;--muted:#67756d;--bg:#f5f8f6;--warn:#fff6db;--danger:#8d3b35}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,Helvetica,sans-serif;color:#1c2822;background:#fff}button,input{font:inherit}button{cursor:pointer}
+    .head{padding:18px 22px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:15px;align-items:flex-start}.head h1{font-size:19px;margin:0;color:#173d2d}.head p{margin:5px 0 0;color:var(--muted);font-size:11px;line-height:1.4}.version{padding:5px 8px;border-radius:999px;background:#e8f3ed;color:#24543f;font-size:9px;font-weight:800;white-space:nowrap}
+    .body{padding:18px 22px;min-height:590px}.notice{padding:11px 13px;border:1px solid #d6e6dd;background:#f4faf6;border-radius:8px;font-size:11px;line-height:1.45}.notice.warn{background:var(--warn);border-color:#ead47f}.notice.error{background:#fff1ef;border-color:#e4bbb6;color:#7c332e}.notice strong{color:#174c37}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-top:14px}.field{display:flex;flex-direction:column;gap:5px}.field.wide{grid-column:1/-1}.field label{font-size:9px;color:#596860;font-weight:800;text-transform:uppercase;letter-spacing:.03em}.field input{height:36px;border:1px solid #cdd8d2;border-radius:7px;padding:0 9px;font-size:12px}.field input[readonly]{background:#f5f7f6;color:#68766f}.info-value{min-height:36px;border:1px solid #d9e3de;border-radius:7px;padding:9px;background:#f5f7f6;color:#536159;font-size:11px;display:flex;align-items:center;overflow-wrap:anywhere}.required{color:#8d3b35;margin-left:2px}
+    .idem{margin-top:14px;border:1px dashed #9fc4b1;background:#f6faf8;border-radius:8px;padding:11px 12px}.idem strong{font-size:11px;color:#174c37}.idem p{margin:4px 0 0;color:#68766f;font-size:10px;line-height:1.4}
+    .progress-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;font-size:10px;color:#64736b}.track{height:8px;background:#e7ece9;border-radius:999px;overflow:hidden}.track span{display:block;height:100%;width:0;background:var(--green);transition:width .25s}
+    .plan{display:grid;gap:6px;margin-top:14px}.step{display:grid;grid-template-columns:26px minmax(0,1fr) 76px;gap:8px;align-items:center;padding:8px 9px;border:1px solid #e0e7e3;border-radius:7px;background:#fff}.step.active{border-color:#9fc9b2;background:#f5faf7}.step.done .num{background:var(--green);color:#fff}.num{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:#edf1ef;color:#75817b;font-size:9px;font-weight:900}.step b{display:block;font-size:10px}.step small{display:block;color:#7b8780;font-size:8.5px;margin-top:2px}.state{font-size:8px;font-weight:900;color:#7b8780;text-align:right}.active .state,.done .state{color:#0c5a36}
+    .log{margin-top:12px;max-height:135px;overflow:auto;border:1px solid #e1e7e4;border-radius:7px;background:#f9fbfa;padding:9px;font:9px/1.5 Consolas,monospace;color:#405148}.log div+div{margin-top:2px}
+    .success{display:grid;grid-template-columns:1fr .9fr;gap:13px}.success-main,.checks{border:1px solid #d9e5de;border-radius:10px;padding:16px}.success-main{background:#f3faf6}.icon{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--green);color:#fff;font-size:20px;font-weight:900}.success h2{margin:10px 0 5px;font-size:17px}.success p{margin:0;color:#64736b;font-size:10.5px;line-height:1.45}.check{padding:6px 0;border-bottom:1px solid #edf1ef;font-size:9.5px}.check:last-child{border-bottom:0}.tick{color:#0c5a36;font-weight:900;margin-right:5px}
+    .guide-nav{display:flex;gap:5px;margin:13px 0}.guide-nav button{flex:1;border:1px solid #d9e2dd;background:#fff;border-radius:6px;height:29px;font-size:9px;font-weight:800;color:#65736c}.guide-nav button.active{background:#eaf4ee;color:#174c37;border-color:#b8d5c5}.guide{border:1px solid #dfe6e2;border-radius:9px;padding:15px}.guide h2{font-size:15px;margin:0 0 6px}.guide p{font-size:10.5px;color:#66746d;line-height:1.5;margin:0 0 12px}.shot{border:1px solid #d9e1dd;border-radius:7px;background:#fafbfa;overflow:hidden}.shot-head{padding:7px 9px;background:#eef2f0;border-bottom:1px solid #d9e1dd;font-size:9px;font-weight:800}.shot-body{padding:12px;font-size:10px;line-height:1.55}.fake{display:grid;grid-template-columns:150px 1fr;gap:7px;margin-top:4px}.fake div:nth-child(odd){color:#69766f}.control{border:1px solid #ccd6d1;border-radius:5px;background:#fff;padding:7px;font-weight:700}.blue{display:inline-block;background:#1a73e8;color:#fff;padding:7px 11px;border-radius:5px;font-weight:800}
+    .footer{padding:13px 22px;border-top:1px solid var(--line);background:#fafcfb;display:flex;justify-content:flex-end;gap:7px}.btn{height:34px;padding:0 12px;border:1px solid #d2ddd7;border-radius:7px;background:#fff;color:#365348;font-size:10.5px;font-weight:800}.btn.primary{background:var(--green);border-color:var(--green);color:#fff}.btn:disabled{opacity:.55;cursor:default}.btn.danger{color:var(--danger)}
+    [hidden]{display:none!important}@media(max-width:700px){.grid,.success{grid-template-columns:1fr}.field.wide{grid-column:auto}.fake{grid-template-columns:1fr}.body{padding:14px}}
+  </style>
+</head>
+<body data-initial-mode="<?= initialMode ?>" data-installation-state="<?= installationState ?>" data-installed="<?= initialInstalled ?>">
+  <header class="head"><div><h1 id="title">Instalar Destaque Acadêmico Top+</h1><p id="subtitle">Assistente de instalação na cópia da planilha instaladora.</p></div><span class="version" id="version">v<?= buildVersion ?></span></header>
+  <main class="body">
+    <section id="intro">
+      <div id="introNotice" class="notice"><strong>Cópia válida detectada.</strong> A instalação será vinculada exclusivamente a esta planilha.</div>
+      <div class="grid">
+        <div class="field"><label>Proprietário / Superusuário</label><div id="ownerEmail" class="info-value"><?= ownerEmail ?></div></div>
+        <div class="field"><label>Nome do Superusuário <span class="required">*</span></label><input id="superName" maxlength="160" autocomplete="name" placeholder="Nome do responsável pela instalação"></div>
+        <div class="field"><label>Versão do sistema</label><div id="appVersion" class="info-value"><?= buildVersion ?></div></div>
+        <div class="field"><label>Versão do schema</label><div id="schemaVersion" class="info-value"><?= schemaVersion ?></div></div>
+        <div class="field wide"><label>Estrutura preparada</label><div class="info-value">11 abas · parâmetros e pacote padrão · modelos de relatório · página pública · Superusuário · validação final</div></div>
+      </div>
+      <div class="idem"><strong>Instalação idempotente</strong><p>Uma reexecução valida o que já existe e cria somente o que estiver ausente. O instalador não duplica parâmetros, pacotes, regras, usuários ou modelos.</p></div>
+    </section>
+
+    <section id="progress" hidden>
+      <div class="progress-top"><b id="progressLabel">Preparando…</b><span id="progressPct">0%</span></div><div class="track"><span id="bar"></span></div>
+      <div class="plan" id="plan"></div><div class="log" id="log"></div>
+    </section>
+
+    <section id="complete" hidden>
+      <div class="success">
+        <div class="success-main"><div class="icon">✓</div><h2>Instalação ativa</h2><p>Bem-vindo ao Destaque Acadêmico Top+! A aba INSTALADORA agora se chama INSTALAÇÃO ATIVA. A base está vinculada a esta cópia e suas tabelas estão ocultas.</p><div class="idem"><strong>Próximo passo</strong><p>Publique o sistema como Aplicativo da Web e guarde a URL <code>/exec</code>.</p></div></div>
+        <div class="checks" id="checks"></div>
+      </div>
+    </section>
+
+    <section id="guideView" hidden>
+      <div class="notice"><strong>O sistema está instalado.</strong> Agora publique o Aplicativo da Web. A operação cotidiana ocorrerá pela URL publicada.</div>
+      <div class="guide-nav" id="guideNav"></div><div class="guide" id="guideContent"></div>
+    </section>
+
+    <div id="error" class="notice error" hidden style="margin-top:12px"></div>
+  </main>
+  <footer class="footer" id="footer"></footer>
+
+<script>
+(function () {
+  var state = null;
+  var GUIDE = { steps: [] };
+  var guideIndex = 0;
+
+  function el(id) { return document.getElementById(id); }
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c];
+    });
+  }
+  function show(id) { el(id).hidden = false; }
+  function hide(id) { el(id).hidden = true; }
+  function setError(message) {
+    if (!message) {
+      hide('error');
+      el('error').textContent = '';
+      return;
+    }
+    el('error').textContent = message;
+    show('error');
+  }
+  function closeDialog() { google.script.host.close(); }
+  function setFooter(buttons) {
+    var footer = el('footer');
+    footer.innerHTML = '';
+    buttons.forEach(function (item) {
+      var button = document.createElement('button');
+      button.className = 'btn' + (item.primary ? ' primary' : '') + (item.danger ? ' danger' : '');
+      button.textContent = item.label;
+      button.disabled = Boolean(item.disabled);
+      button.onclick = item.onClick;
+      footer.appendChild(button);
+    });
+  }
+  function initialMode() { return document.body.getAttribute('data-initial-mode') || 'INSTALL'; }
+  function initialStateCode() { return document.body.getAttribute('data-installation-state') || 'NOT_INSTALLED'; }
+  function initialInstalled() { return document.body.getAttribute('data-installed') === 'true'; }
+
+  function initializeFromRenderedState() {
+    setError('');
+    state = {
+      state: initialStateCode(),
+      installed: initialInstalled(),
+      version: el('appVersion').textContent || '',
+      schemaVersion: el('schemaVersion').textContent || '',
+      ownerEmail: el('ownerEmail').textContent || '',
+      plan: []
+    };
+
+    if (initialMode() === 'GUIDE') {
+      if (!state.installed) {
+        setError('Conclua a instalação antes de abrir as orientações de implantação.');
+        setFooter([{ label: 'Fechar', onClick: closeDialog }]);
+        return;
+      }
+      loadGuide();
+      return;
+    }
+
+    if (state.installed) {
+      showComplete();
+      return;
+    }
+
+    if (state.state === 'FAILED') {
+      el('introNotice').className = 'notice warn';
+      el('introNotice').innerHTML = '<strong>Instalação anterior interrompida.</strong> O assistente retomará a partir da etapa segura registrada, reaproveitando tudo o que já foi criado.';
+    }
+
+    setFooter([
+      { label: 'Cancelar', onClick: closeDialog },
+      { label: state.state === 'FAILED' ? 'Retomar instalação' : 'Iniciar instalação', primary: true, onClick: startInstall }
+    ]);
+  }
+
+  function renderPlan(active, done) {
+    var host = el('plan');
+    host.innerHTML = '';
+    var plan = state && state.plan ? state.plan : [];
+    plan.forEach(function (item, index) {
+      var row = document.createElement('div');
+      row.className = 'step' + (index === active ? ' active' : '') + (index <= done ? ' done' : '');
+      row.innerHTML = '<span class="num">' + (index <= done ? '✓' : index + 1) + '</span>' +
+        '<div><b>' + escapeHtml(item.label) + '</b><small>' + escapeHtml(item.detail) + '</small></div>' +
+        '<span class="state">' + (index <= done ? 'CONCLUÍDO' : index === active ? 'EXECUTANDO' : 'AGUARDANDO') + '</span>';
+      host.appendChild(row);
+    });
+  }
+
+  function logLine(text) {
+    var item = document.createElement('div');
+    item.textContent = '• ' + text;
+    el('log').appendChild(item);
+    el('log').scrollTop = el('log').scrollHeight;
+  }
+
+  function startInstall() {
+    setError('');
+    var name = el('superName').value.trim();
+    if (!name) {
+      setError('Informe o nome do Superusuário.');
+      return;
+    }
+    hide('intro');
+    hide('complete');
+    hide('guideView');
+    show('progress');
+    el('log').innerHTML = '';
+    setFooter([{ label: 'Instalação em andamento…', disabled: true, onClick: function () {} }]);
+    google.script.run
+      .withSuccessHandler(beginResult)
+      .withFailureHandler(serverError)
+      .beginTopPlusInstallation({ superuserName: name });
+  }
+
+  function beginResult(result) {
+    if (!result) {
+      serverError({ message: 'O instalador não retornou uma resposta válida.' });
+      return;
+    }
+    if (result.done) {
+      state = result.state || state;
+      showComplete();
+      return;
+    }
+    state.plan = result.plan || state.plan || [];
+    var start = Number(result.nextStep || 0);
+    renderPlan(start, start - 1);
+    if (result.resumed) logLine('Instalação retomada a partir da etapa ' + (start + 1) + '.');
+    runNext(result.runId);
+  }
+
+  function runNext(runId) {
+    google.script.run
+      .withSuccessHandler(function (result) {
+        if (!result) {
+          serverError({ message: 'A etapa de instalação não retornou uma resposta válida.' });
+          return;
+        }
+        if (result.detail) logLine(result.detail);
+        (result.metrics || []).forEach(logLine);
+        if (result.done) {
+          state = result.state || state;
+          el('progressPct').textContent = '100%';
+          el('bar').style.width = '100%';
+          renderPlan(-1, (state.plan || []).length - 1);
+          setTimeout(showComplete, 350);
+          return;
+        }
+        var pct = Number(result.progress || 0);
+        el('progressPct').textContent = pct + '%';
+        el('bar').style.width = pct + '%';
+        el('progressLabel').textContent = result.step ? result.step.label : 'Instalando…';
+        renderPlan(Number(result.nextStep || 0), Number(result.nextStep || 0) - 1);
+        setTimeout(function () { runNext(runId); }, 100);
+      })
+      .withFailureHandler(serverError)
+      .runTopPlusInstallationStep(runId);
+  }
+
+  function serverError(error) {
+    setError(error && error.message ? error.message : String(error || 'Falha desconhecida.'));
+    setFooter([
+      { label: 'Fechar', onClick: closeDialog },
+      { label: 'Tentar novamente', primary: true, onClick: initializeFromRenderedState }
+    ]);
+  }
+
+  function showComplete() {
+    hide('intro');
+    hide('progress');
+    hide('guideView');
+    show('complete');
+    setError('');
+    el('title').textContent = 'Destaque Acadêmico instalado';
+    el('subtitle').textContent = 'Estrutura verificada e pronta para publicação.';
+    var checks = [
+      '11 abas da base validadas',
+      'Parâmetros e pacote semestral disponíveis',
+      'Modelos padrão de relatório disponíveis',
+      'Página pública de premiados configurada',
+      'Proprietário registrado como Superusuário',
+      'Gateway vinculado à própria cópia'
+    ];
+    el('checks').innerHTML = checks.map(function (item) {
+      return '<div class="check"><span class="tick">✓</span>' + escapeHtml(item) + '</div>';
+    }).join('');
+    setFooter([
+      { label: 'Fechar', onClick: closeDialog },
+      { label: 'Verificar novamente', onClick: verify },
+      { label: 'Orientar implantação', primary: true, onClick: openGuide }
+    ]);
+  }
+
+  function verify() {
+    setError('');
+    setFooter([{ label: 'Verificando…', disabled: true, onClick: function () {} }]);
+    google.script.run
+      .withSuccessHandler(function (result) {
+        state = result && result.state ? result.state : state;
+        el('checks').insertAdjacentHTML('beforeend', '<div class="check"><span class="tick">✓</span>Verificação idempotente concluída sem duplicações</div>');
+        setFooter([
+          { label: 'Fechar', onClick: closeDialog },
+          { label: 'Orientar implantação', primary: true, onClick: openGuide }
+        ]);
+      })
+      .withFailureHandler(serverError)
+      .verifyTopPlusInstallation();
+  }
+
+  function loadGuide() {
+    setFooter([{ label: 'Carregando orientações…', disabled: true, onClick: function () {} }]);
+    google.script.run
+      .withSuccessHandler(function (result) {
+        GUIDE = result && Array.isArray(result.steps) ? result : { steps: [] };
+        openGuide();
+      })
+      .withFailureHandler(serverError)
+      .getTopPlusDeploymentGuide();
+  }
+
+  function openGuide() {
+    if (!GUIDE.steps.length) {
+      loadGuide();
+      return;
+    }
+    hide('intro');
+    hide('progress');
+    hide('complete');
+    show('guideView');
+    el('title').textContent = 'Publicar o Destaque Acadêmico TOP+';
+    el('subtitle').textContent = 'Siga os quatro passos no Google Apps Script.';
+    guideIndex = 0;
+    renderGuide();
+    setFooter([{ label: 'Fechar', onClick: closeDialog }]);
+  }
+
+  function renderGuide() {
+    var nav = el('guideNav');
+    nav.innerHTML = '';
+    if (!GUIDE.steps.length) {
+      setError('As orientações de implantação não foram carregadas.');
+      return;
+    }
+    GUIDE.steps.forEach(function (step, index) {
+      var button = document.createElement('button');
+      button.textContent = 'Passo ' + (index + 1);
+      button.className = index === guideIndex ? 'active' : '';
+      button.onclick = function () { guideIndex = index; renderGuide(); };
+      nav.appendChild(button);
+    });
+
+    var current = GUIDE.steps[guideIndex];
+    var visual = '';
+    if (guideIndex === 0) visual = 'Na planilha: <b>Extensões → Apps Script</b>';
+    if (guideIndex === 1) visual = '<span class="blue">Implantar</span> → <b>Nova implantação</b> → <b>App da Web</b>';
+    if (guideIndex === 2) visual = '<div class="fake"><div>Descrição</div><div class="control">Destaque Acadêmico TOP+</div><div>Executar como</div><div class="control">Eu (usuário que está implantando)</div><div>Quem pode acessar</div><div class="control">Qualquer pessoa *</div></div><div style="margin-top:8px;font-size:9px;color:#6d7973">* Conforme permitido pela política do domínio.</div>';
+    if (guideIndex === 3) visual = '<div style="color:#68766f;margin-bottom:7px">URL do aplicativo da Web</div><div class="control">https://script.google.com/macros/s/…/exec</div>';
+
+    el('guideContent').innerHTML = '<h2>' + escapeHtml(current.title) + '</h2><p>' + escapeHtml(current.text) + '</p>' +
+      '<div class="shot"><div class="shot-head">Google Workspace / Apps Script</div><div class="shot-body">' + visual + '</div></div>' +
+      '<div style="display:flex;justify-content:space-between;margin-top:12px"><button class="btn" id="prev" ' + (guideIndex === 0 ? 'disabled' : '') + '>Anterior</button><button class="btn primary" id="next" ' + (guideIndex === GUIDE.steps.length - 1 ? 'disabled' : '') + '>Próximo</button></div>';
+    el('prev').onclick = function () { if (guideIndex > 0) { guideIndex--; renderGuide(); } };
+    el('next').onclick = function () { if (guideIndex < GUIDE.steps.length - 1) { guideIndex++; renderGuide(); } };
+  }
+
+  initializeFromRenderedState();
+})();
+</script>
+</body>
+</html>
